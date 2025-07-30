@@ -328,7 +328,7 @@ class KommoSyncService:
                 }
                 
                 # Preservar ID da master para mapeamento, mas usar ID padrão quando aplicável
-                stage_data['master_id'] = stage['id']  # ID original da master para mapeamento
+                stage_data['id'] = stage['id']  # ID original da master para mapeamento
                 if default_stage_id:
                     stage_data['default_id'] = default_stage_id  # ID padrão para usar na slave
                     logger.debug(f"Estágio '{stage['name']}' usará ID padrão {default_stage_id}")
@@ -456,8 +456,10 @@ class KommoSyncService:
                                 stage_data['id'] = master_stage['default_id']
                                 logger.info(f"🆔 Incluindo ID {master_stage['default_id']} para estágio '{master_stage['name']}' na criação do pipeline")
                             
-                            color_code = kommo_colors[i % len(kommo_colors)]
-                            stage_data['color'] = color_code
+                            # Usar a cor do stage da master ou cor padrão se não estiver definida
+                            master_color = master_stage.get('color', kommo_colors[i % len(kommo_colors)])
+                            stage_data['color'] = master_color
+                            logger.debug(f"Estágio '{master_stage['name']}' usando cor da master '{master_color}'")
                             stages_data.append(stage_data)
                         
                         pipeline_data = {
@@ -630,10 +632,10 @@ class KommoSyncService:
                     'type': stage_type
                 }
                 
-                # Usar cores do Kommo COM # para manter consistência
-                color_code = kommo_colors[i % len(kommo_colors)]
-                stage_data['color'] = color_code
-                logger.debug(f"Estágio '{stage_name}' usando cor '{color_code}' (índice {i})")
+                # Usar a cor do stage da master ou cor padrão se não estiver definida
+                master_color = master_stage.get('color', kommo_colors[i % len(kommo_colors)])
+                stage_data['color'] = master_color
+                logger.debug(f"Estágio '{stage_name}' usando cor da master '{master_color}' (índice {i})")
                 
                 # Verificar se estágio já existe (verificação detalhada)
                 stage_exists = stage_name in existing_stages
