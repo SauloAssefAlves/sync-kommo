@@ -448,6 +448,15 @@ class KommoSyncService:
                             if master_stage.get('type', 0) == 1:
                                 logger.info(f"🚫 Pulando estágio type=1 '{master_stage['name']}' - será criado automaticamente pelo Kommo")
                                 continue
+                            
+                            # Verificar se é um estágio especial do sistema (Won=142, Lost=143)
+                            default_stage_id = self._get_default_stage_id(master_stage['name'], master_stage.get('type', 0))
+                            is_system_stage = default_stage_id in [142, 143]
+                            
+                            # Pular estágios especiais (Won=142, Lost=143) - serão gerenciados pelo Kommo
+                            if is_system_stage:
+                                logger.info(f"🚫 Pulando estágio especial '{master_stage['name']}' (ID {default_stage_id}) - será gerenciado automaticamente pelo Kommo")
+                                continue
                                 
                             stage_data = {
                                 'name': master_stage['name'],
@@ -455,20 +464,12 @@ class KommoSyncService:
                                 'type': master_stage.get('type', 0)
                             }
                             
-                            # Verificar se é um estágio especial e incluir ID padrão do Kommo
-                            default_stage_id = self._get_default_stage_id(master_stage['name'], master_stage.get('type', 0))
-                            if default_stage_id in [142, 143]:  # Apenas para Won (142) e Lost (143)
-                                stage_data['id'] = default_stage_id
-                                logger.info(f"🆔 Incluindo ID {default_stage_id} para estágio '{master_stage['name']}' na criação do pipeline")
-                            elif 'default_id' in master_stage and master_stage['default_id'] in [142, 143]:
-                                stage_data['id'] = master_stage['default_id']
-                                logger.info(f"🆔 Incluindo ID {master_stage['default_id']} para estágio '{master_stage['name']}' na criação do pipeline")
-                            
-                            # Usar a cor do stage da master validada
+                            # Usar a cor do stage da master validada (já que estágios especiais foram pulados)
                             master_color = master_stage.get('color')
                             valid_color = get_valid_kommo_color(master_color, i)
                             stage_data['color'] = valid_color
                             logger.debug(f"Estágio '{master_stage['name']}' - Cor master: '{master_color}' -> Cor válida: '{valid_color}'")
+                                
                             stages_data.append(stage_data)
                         
                         pipeline_data = {
@@ -492,10 +493,10 @@ class KommoSyncService:
                         if 'stages' not in mappings:
                             mappings['stages'] = {}
                         
-                        # Mapear apenas os estágios que foram realmente criados (excluindo type=1)
+                        # Mapear apenas os estágios que foram realmente enviados (excluindo type=1 e especiais)
                         created_stage_index = 0
                         for master_stage in master_pipeline['stages']:
-                            # Pular estágios type=1 no mapeamento também
+                            # Pular estágios type=1 no mapeamento
                             if master_stage.get('type', 0) == 1:
                                 # Para estágios type=1, mapear para o estágio automático criado pelo Kommo
                                 # Buscar o estágio type=1 nos estágios criados
@@ -507,16 +508,23 @@ class KommoSyncService:
                                         break
                                 continue
                             
+                            # Pular estágios especiais (142, 143) no mapeamento
+                            default_stage_id = self._get_default_stage_id(master_stage['name'], master_stage.get('type', 0))
+                            if default_stage_id in [142, 143]:
+                                # Mapear para os IDs especiais criados automaticamente pelo Kommo
+                                for created_stage in created_stages:
+                                    if created_stage.get('id') == default_stage_id:
+                                        master_stage_id = master_stage['id']
+                                        mappings['stages'][master_stage_id] = default_stage_id
+                                        logger.info(f"🆔 Mapeando estágio especial '{master_stage['name']}' para ID do sistema {default_stage_id}")
+                                        break
+                                continue
+                            
+                            # Mapear estágios normais
                             if created_stage_index < len(created_stages):
-                                # Verificar se deve usar ID padrão do Kommo
-                                if 'default_id' in master_stage:
-                                    # Usar ID padrão para mapeamento
-                                    slave_stage_id = master_stage['default_id']
-                                    logger.info(f"🆔 Mapeando estágio '{master_stage['name']}' para ID padrão {slave_stage_id}")
-                                else:
-                                    # Usar ID gerado pela API
-                                    slave_stage_id = created_stages[created_stage_index]['id']
-                                    logger.info(f"✅ Mapeando estágio '{master_stage['name']}' para ID gerado {slave_stage_id}")
+                                # Usar ID gerado pela API
+                                slave_stage_id = created_stages[created_stage_index]['id']
+                                logger.info(f"✅ Mapeando estágio '{master_stage['name']}' para ID gerado {slave_stage_id}")
                                 
                                 # Usar ID do master stage
                                 master_stage_id = master_stage['id']
@@ -642,6 +650,15 @@ class KommoSyncService:
                     logger.info(f"🚫 Pulando estágio type=1 '{stage_name}' - será criado automaticamente pelo Kommo")
                     continue
                 
+                # Verificar se é um estágio especial do sistema (Won=142, Lost=143)
+                default_stage_id = self._get_default_stage_id(stage_name, stage_type)
+                is_system_stage = default_stage_id in [142, 143]
+                
+                # Pular estágios especiais (Won=142, Lost=143) - serão gerenciados pelo Kommo
+                if is_system_stage:
+                    logger.info(f"🚫 Pulando estágio especial '{stage_name}' (ID {default_stage_id}) - será gerenciado automaticamente pelo Kommo")
+                    continue
+                
                 # Preparar dados do estágio sem IDs da conta mestre
                 stage_data = {
                     'name': master_stage['name'],
@@ -649,7 +666,7 @@ class KommoSyncService:
                     'type': stage_type
                 }
                 
-                # Usar a cor do stage da master ou cor padrão se não estiver definida
+                # Usar a cor do stage da master validada (já que estágios especiais foram pulados)
                 master_color = master_stage.get('color')
                 valid_color = get_valid_kommo_color(master_color, i)
                 stage_data['color'] = valid_color
@@ -672,34 +689,19 @@ class KommoSyncService:
                     master_stage_id = master_stage['id']
                     mappings['stages'][master_stage_id] = slave_stage_id
                 else:
-                    # Verificar se deve usar ID padrão do Kommo para estágios especiais
-                    default_stage_id = self._get_default_stage_id(stage_name, master_stage.get('type', 0))
+                    # Criar novo estágio na conta escrava
+                    logger.info(f"🆕 Criando estágio '{stage_name}' no pipeline {slave_pipeline_id}")
+                    logger.debug(f"Dados do estágio: {stage_data}")
+                    response = slave_api.create_pipeline_stage(slave_pipeline_id, stage_data)
+                    slave_stage_id = response['_embedded']['statuses'][0]['id']
+                    logger.info(f"✅ Estágio '{stage_name}' criado com ID: {slave_stage_id}")
                     
-                    if default_stage_id:
-                        # Usar ID padrão para estágios Won (142) ou Lost (143)
-                        logger.info(f"🆔 Usando ID padrão {default_stage_id} para estágio '{stage_name}' (tipo: {master_stage.get('type', 0)})")
-                        slave_stage_id = default_stage_id
-                        
-                        # Armazenar mapeamento com ID padrão
-                        if 'stages' not in mappings:
-                            mappings['stages'] = {}
-                        # Usar ID do master stage
-                        master_stage_id = master_stage['id']
-                        mappings['stages'][master_stage_id] = slave_stage_id
-                    else:
-                        # Criar novo estágio na conta escrava APENAS se não existir
-                        logger.info(f"🆕 Criando estágio '{stage_name}' no pipeline {slave_pipeline_id}")
-                        logger.debug(f"Dados do estágio: {stage_data}")
-                        response = slave_api.create_pipeline_stage(slave_pipeline_id, stage_data)
-                        slave_stage_id = response['_embedded']['statuses'][0]['id']
-                        logger.info(f"✅ Estágio '{stage_name}' criado com ID: {slave_stage_id}")
-                        
-                        # Armazenar mapeamento para o estágio recém-criado
-                        if 'stages' not in mappings:
-                            mappings['stages'] = {}
-                        # Usar ID do master stage
-                        master_stage_id = master_stage['id']
-                        mappings['stages'][master_stage_id] = slave_stage_id
+                    # Armazenar mapeamento para o estágio recém-criado
+                    if 'stages' not in mappings:
+                        mappings['stages'] = {}
+                    # Usar ID do master stage
+                    master_stage_id = master_stage['id']
+                    mappings['stages'][master_stage_id] = slave_stage_id
                 
             except Exception as e:
                 logger.error(f"Erro ao sincronizar estágio '{master_stage['name']}': {e}")
@@ -740,6 +742,33 @@ class KommoSyncService:
         else:
             logger.info(f"✅ Nenhum estágio excedente encontrado no pipeline '{master_pipeline['name']}'")
     
+    def _is_system_stage(self, stage: Dict) -> bool:
+        """Verifica se um estágio é um estágio especial do sistema (Won=142, Lost=143, Incoming=1)"""
+        stage_id = stage.get('id')
+        stage_type = stage.get('type', 0)
+        stage_name = stage.get('name', '').lower()
+        
+        # Verificar por ID direto
+        if stage_id in [1, 142, 143]:
+            return True
+            
+        # Verificar por tipo
+        if stage_type == 1:  # Incoming leads
+            return True
+            
+        # Verificar por nome (padrões conhecidos)
+        system_patterns = [
+            'incoming leads', 'incoming', 'etapa de leads de entrada', 'leads de entrada', 'entrada',
+            'won', 'ganho', 'ganha', 'venda ganha', 'fechado - ganho', 'closed - won', 'successful', 'sucesso',
+            'lost', 'perdido', 'perdida', 'venda perdida', 'fechado - perdido', 'closed - lost', 'unsuccessful', 'fracasso'
+        ]
+        
+        for pattern in system_patterns:
+            if pattern in stage_name:
+                return True
+                
+        return False
+
     def _get_default_stage_id(self, stage_name: str, stage_type: int) -> int:
         """Retorna o ID padrão do Kommo para estágios especiais (Incoming=1, Won=142, Lost=143)"""
         stage_name_lower = stage_name.lower()

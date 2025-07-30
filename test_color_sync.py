@@ -103,11 +103,18 @@ def test_color_sync():
                                     break
                             
                             if master_stage:
-                                master_color = master_stage['color']
-                                slave_color = slave_stage.get('color', 'N/A')
-                                match = master_color == slave_color
-                                status = "✅" if match else "❌"
-                                logger.info(f"  {status} {slave_stage['name']}: Master={master_color} | Slave={slave_color}")
+                                # Verificar se é um estágio especial do sistema (Won=142, Lost=143)
+                                stage_id = slave_stage.get('id')
+                                is_system_stage = stage_id in [142, 143]
+                                
+                                if is_system_stage:
+                                    logger.info(f"  ⚪ {slave_stage['name']}: Estágio especial do sistema (ID: {stage_id}) - Cores definidas pelo Kommo")
+                                else:
+                                    master_color = master_stage['color']
+                                    slave_color = slave_stage.get('color', 'N/A')
+                                    match = master_color == slave_color
+                                    status = "✅" if match else "❌"
+                                    logger.info(f"  {status} {slave_stage['name']}: Master={master_color} | Slave={slave_color}")
                             else:
                                 logger.info(f"  ⚠️ Estágio '{slave_stage['name']}' não encontrado na master")
                 
