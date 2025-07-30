@@ -436,13 +436,43 @@ class KommoSyncService:
                         ]
                         
                         def get_valid_kommo_color(master_color, fallback_index):
-                            """Retorna uma cor válida do Kommo baseada na cor da master ou fallback"""
+                            """Retorna uma cor válida do Kommo baseada na cor da master ou fallback inteligente"""
+                            # Se a cor da master é válida, usar ela
                             if master_color and master_color.lower() in [c.lower() for c in kommo_colors]:
                                 return master_color
-                            else:
-                                # Se a cor da master não é válida, usar cor do índice como fallback
-                                return kommo_colors[fallback_index % len(kommo_colors)]
+                            
+                            # Se não é válida, tentar mapear para cor similar
+                            if master_color:
+                                master_color_lower = master_color.lower()
+                                
+                                # Mapear cores azuis para cores azuis válidas do Kommo
+                                if any(blue_hint in master_color_lower for blue_hint in ['blue', 'azul']) or master_color_lower in ['#0000ff', '#0066ff', '#4169e1']:
+                                    return '#98cbff'  # Azul forte do Kommo
+                                
+                                # Mapear cores verdes para cores verdes válidas do Kommo  
+                                if any(green_hint in master_color_lower for green_hint in ['green', 'verde']) or master_color_lower in ['#00ff00', '#008000', '#32cd32']:
+                                    return '#87f2c0'  # Verde forte do Kommo
+                                
+                                # Mapear cores vermelhas/rosas para cores vermelhas válidas do Kommo
+                                if any(red_hint in master_color_lower for red_hint in ['red', 'vermelho', '#ff0000', '#dc143c', '#b22222']):
+                                    return '#ff8f92'  # Rosa forte do Kommo
+                                
+                                # Mapear cores roxas para cores roxas válidas do Kommo
+                                if any(purple_hint in master_color_lower for purple_hint in ['purple', 'roxo', '#800080', '#9932cc', '#8a2be2']):
+                                    return '#eb93ff'  # Magenta do Kommo
+                                
+                                # Mapear cores amarelas para cores amarelas válidas do Kommo
+                                if any(yellow_hint in master_color_lower for yellow_hint in ['yellow', 'amarelo', '#ffff00', '#ffd700', '#fff8dc']):
+                                    return '#fff000'  # Amarelo forte do Kommo
+                                
+                                # Mapear cores laranjas para cores laranjas válidas do Kommo
+                                if any(orange_hint in master_color_lower for orange_hint in ['orange', 'laranja', '#ffa500', '#ff8c00', '#ff7f50']):
+                                    return '#ffce5a'  # Laranja forte do Kommo
+                            
+                            # Se nenhum mapeamento específico, usar fallback por índice
+                            return kommo_colors[fallback_index % len(kommo_colors)]
                         
+                        processed_stage_index = 0  # Contador para estágios realmente processados
                         for i, master_stage in enumerate(master_pipeline['stages']):
                             # Pular estágios com type=1 (incoming leads) - serão criados automaticamente pelo Kommo
                             if master_stage.get('type', 0) == 1:
@@ -464,11 +494,13 @@ class KommoSyncService:
                                 'type': master_stage.get('type', 0)
                             }
                             
-                            # Usar a cor do stage da master validada (já que estágios especiais foram pulados)
+                            # Usar a cor do stage da master validada (usar contador de estágios processados para fallback)
                             master_color = master_stage.get('color')
-                            valid_color = get_valid_kommo_color(master_color, i)
+                            valid_color = get_valid_kommo_color(master_color, processed_stage_index)
                             stage_data['color'] = valid_color
-                            logger.debug(f"Estágio '{master_stage['name']}' - Cor master: '{master_color}' -> Cor válida: '{valid_color}'")
+                            logger.debug(f"Estágio '{master_stage['name']}' - Cor master: '{master_color}' -> Cor válida: '{valid_color}' (índice processado: {processed_stage_index})")
+                            
+                            processed_stage_index += 1  # Incrementar apenas para estágios processados
                                 
                             stages_data.append(stage_data)
                         
@@ -486,7 +518,9 @@ class KommoSyncService:
                         results['created'] += 1
                         
                         # Sincronizar nomes dos estágios automáticos criados pelo Kommo
-                        self._sync_automatic_stage_names(slave_api, master_pipeline, slave_pipeline_id)
+                        # DESABILITADO: Os estágios especiais (142, 143) são gerenciados automaticamente pelo Kommo
+                        # self._sync_automatic_stage_names(slave_api, master_pipeline, slave_pipeline_id)
+                        logger.info(f"ℹ️ Sincronização de nomes automáticos desabilitada - Kommo gerencia os estágios especiais automaticamente")
                         
                         # Armazenar mapeamentos dos estágios criados
                         created_stages = response['_embedded']['pipelines'][0]['_embedded']['statuses']
@@ -631,14 +665,42 @@ class KommoSyncService:
         ]
         
         def get_valid_kommo_color(master_color, fallback_index):
-            """Retorna uma cor válida do Kommo baseada na cor da master ou fallback"""
+            """Retorna uma cor válida do Kommo baseada na cor da master ou fallback inteligente"""
+            # Se a cor da master é válida, usar ela
             if master_color and master_color.lower() in [c.lower() for c in kommo_colors]:
                 return master_color
-            else:
-                # Se a cor da master não é válida, usar cor do índice como fallback
-                return kommo_colors[fallback_index % len(kommo_colors)]
+            
+            # Se não é válida, tentar mapear para cor similar
+            if master_color:
+                master_color_lower = master_color.lower()
+                
+            # Mapear cores azuis para cores azuis válidas do Kommo
+            if any(blue_hint in master_color_lower for blue_hint in ['blue', 'azul']) or master_color_lower in ['#0000ff', '#0066ff', '#4169e1']:
+                return '#98cbff'  # Azul forte do Kommo
+            
+            # Mapear cores verdes para cores verdes válidas do Kommo  
+            if any(green_hint in master_color_lower for green_hint in ['green', 'verde']) or master_color_lower in ['#00ff00', '#008000', '#32cd32']:
+                return '#87f2c0'  # Verde forte do Kommo                # Mapear cores vermelhas/rosas para cores vermelhas válidas do Kommo
+                if any(red_hint in master_color_lower for red_hint in ['red', 'vermelho', '#ff0000', '#dc143c', '#b22222']):
+                    return '#ff8f92'  # Rosa forte do Kommo
+                
+                # Mapear cores roxas para cores roxas válidas do Kommo
+                if any(purple_hint in master_color_lower for purple_hint in ['purple', 'roxo', '#800080', '#9932cc', '#8a2be2']):
+                    return '#eb93ff'  # Magenta do Kommo
+                
+                # Mapear cores amarelas para cores amarelas válidas do Kommo
+                if any(yellow_hint in master_color_lower for yellow_hint in ['yellow', 'amarelo', '#ffff00', '#ffd700', '#fff8dc']):
+                    return '#fff000'  # Amarelo forte do Kommo
+                
+                # Mapear cores laranjas para cores laranjas válidas do Kommo
+                if any(orange_hint in master_color_lower for orange_hint in ['orange', 'laranja', '#ffa500', '#ff8c00', '#ff7f50']):
+                    return '#ffce5a'  # Laranja forte do Kommo
+            
+            # Se nenhum mapeamento específico, usar fallback por índice
+            return kommo_colors[fallback_index % len(kommo_colors)]
         
         # FASE 1: Criar/Atualizar estágios da master que estão faltando na slave
+        processed_stage_index = 0  # Contador para estágios realmente processados
         for i, master_stage in enumerate(master_pipeline['stages']):
             try:
                 stage_name = master_stage['name']
@@ -666,11 +728,13 @@ class KommoSyncService:
                     'type': stage_type
                 }
                 
-                # Usar a cor do stage da master validada (já que estágios especiais foram pulados)
+                # Usar a cor do stage da master validada (usar contador de estágios processados para fallback)
                 master_color = master_stage.get('color')
-                valid_color = get_valid_kommo_color(master_color, i)
+                valid_color = get_valid_kommo_color(master_color, processed_stage_index)
                 stage_data['color'] = valid_color
-                logger.debug(f"Estágio '{stage_name}' - Cor master: '{master_color}' -> Cor válida: '{valid_color}' (índice {i})")
+                logger.debug(f"Estágio '{stage_name}' - Cor master: '{master_color}' -> Cor válida: '{valid_color}' (índice processado: {processed_stage_index})")
+                
+                processed_stage_index += 1  # Incrementar apenas para estágios processados
                 
                 # Verificar se estágio já existe (verificação detalhada)
                 stage_exists = stage_name in existing_stages
@@ -927,7 +991,20 @@ class KommoSyncService:
         return False
     
     def _sync_automatic_stage_names(self, slave_api: KommoAPIService, master_pipeline: Dict, slave_pipeline_id: int):
-        """Sincroniza nomes dos estágios automáticos criados pelo Kommo (type=1, ID=142, ID=143)"""
+        """
+        [FUNÇÃO DESABILITADA] Sincroniza nomes dos estágios automáticos criados pelo Kommo (type=1, ID=142, ID=143)
+        
+        MOTIVO DA DESABILITAÇÃO:
+        Os estágios especiais do Kommo (Won=142, Lost=143) são gerenciados automaticamente pelo sistema
+        e seus nomes são definidos de acordo com o idioma da conta (PT: "Venda ganha/perdida", EN: "Closed - won/lost").
+        Tentar modificá-los manualmente causa erros HTTP 400 "NotSupportedChoice".
+        
+        Esta função está mantida apenas para documentação e possível uso futuro se necessário.
+        """
+        logger.info(f"🚫 _sync_automatic_stage_names está desabilitada - estágios especiais são gerenciados pelo Kommo")
+        return  # Função desabilitada
+        
+        # Código original mantido para referência (não executado)
         logger.info(f"🔄 Sincronizando nomes dos estágios automáticos do pipeline '{master_pipeline['name']}'")
         
         try:
