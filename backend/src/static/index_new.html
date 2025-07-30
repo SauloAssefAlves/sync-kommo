@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kommo Sync System - Sincronização em Lotes</title>
+    <link
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css"
+      rel="stylesheet"
+    />
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        color: #333;
+      }
+
+      .container {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      header {
+        text-align: center;
+        color: white;
+        margin-bottom: 30px;
+      }
+
+      header h1 {
+        font-size: 2.5rem;
+        margin-bottom: 10px;
+        text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+      }
+
+      header p {
+        font-size: 1.1rem;
+        opacity: 0.9;
+      }
+
+      .section {
+        background: white;
+        border-radius: 15px;
+        padding: 25px;
+        margin-bottom: 25px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+
+      .section h2 {
+        color: #4a5568;
+        margin-bottom: 20px;
+        font-size: 1.5rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      /* Configurações de Lote */
+      .batch-config {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+        gap: 20px;
+      }
+
+      .config-item {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .config-item label {
+        font-weight: 600;
+        color: #4a5568;
+      }
+
+      .config-item input {
+        padding: 10px;
+        border: 2px solid #e2e8f0;
+        border-radius: 8px;
+        font-size: 16px;
+        transition: border-color 0.3s;
+      }
+
+      .config-item input:focus {
+        outline: none;
+        border-color: #667eea;
+      }
+
+      .tooltip {
+        font-size: 0.85rem;
+        color: #718096;
+        font-style: italic;
+      }
+
+      /* Status da Sincronização */
+      .sync-status {
+        display: grid;
+        gap: 15px;
+      }
+
+      .status-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 10px 0;
+        border-bottom: 1px solid #e2e8f0;
+      }
+
+      .status-item:last-child {
+        border-bottom: none;
+      }
+
+      .status-label {
+        font-weight: 600;
+        color: #4a5568;
+      }
+
+      .status-value {
+        color: #2d3748;
+        font-weight: 500;
+      }
+
+      .progress-container {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex: 1;
+        max-width: 300px;
+      }
+
+      .progress-bar {
+        flex: 1;
+        height: 20px;
+        background-color: #e2e8f0;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .progress-fill {
+        height: 100%;
+        background: linear-gradient(90deg, #667eea, #764ba2);
+        width: 0%;
+        transition: width 0.3s ease;
+      }
+
+      .progress-text {
+        font-weight: 600;
+        color: #4a5568;
+        min-width: 45px;
+      }
+
+      /* Botões */
+      .btn {
+        padding: 12px 24px;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 14px;
+        transition: all 0.3s;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        text-decoration: none;
+        margin: 5px;
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+      }
+
+      .btn-primary:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+      }
+
+      .btn-secondary {
+        background: #f7fafc;
+        color: #4a5568;
+        border: 2px solid #e2e8f0;
+      }
+
+      .btn-secondary:hover {
+        background: #edf2f7;
+        border-color: #cbd5e0;
+      }
+
+      .btn-danger {
+        background: linear-gradient(135deg, #f56565, #e53e3e);
+        color: white;
+      }
+
+      .btn-danger:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(245, 101, 101, 0.4);
+      }
+
+      .btn-primary-large {
+        background: linear-gradient(135deg, #48bb78, #38a169);
+        color: white;
+        font-size: 16px;
+        padding: 16px 32px;
+      }
+
+      .btn-primary-large:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 12px 35px rgba(72, 187, 120, 0.4);
+      }
+
+      .btn-outline {
+        background: transparent;
+        border: 2px solid #667eea;
+        color: #667eea;
+      }
+
+      .btn-outline:hover {
+        background: #667eea;
+        color: white;
+      }
+
+      .btn-small {
+        padding: 6px 12px;
+        font-size: 12px;
+      }
+
+      .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none !important;
+        box-shadow: none !important;
+      }
+
+      /* Ações de Sincronização */
+      .sync-actions {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+      }
+
+      /* Múltiplas Contas */
+      .multi-account-section {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 30px;
+      }
+
+      .account-list {
+        background: #f7fafc;
+        padding: 20px;
+        border-radius: 10px;
+      }
+
+      .account-list h3 {
+        margin-bottom: 15px;
+        color: #4a5568;
+      }
+
+      .accounts-list {
+        max-height: 300px;
+        overflow-y: auto;
+      }
+
+      .account-item {
+        background: white;
+        padding: 15px;
+        border-radius: 8px;
+        margin-bottom: 10px;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .account-info strong {
+        color: #2d3748;
+      }
+
+      .account-status {
+        padding: 4px 8px;
+        border-radius: 4px;
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+      }
+
+      .account-status.online {
+        background: #c6f6d5;
+        color: #22543d;
+      }
+
+      .account-status.offline {
+        background: #fed7d7;
+        color: #742a2a;
+      }
+
+      .account-status.error {
+        background: #fbb6ce;
+        color: #702459;
+      }
+
+      .account-actions {
+        display: flex;
+        gap: 5px;
+      }
+
+      .multi-sync-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+
+      .multi-sync-options {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .multi-sync-options label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        color: #4a5568;
+      }
+
+      /* Logs */
+      .logs-container {
+        background: #1a202c;
+        border-radius: 10px;
+        overflow: hidden;
+      }
+
+      .logs-header {
+        background: #2d3748;
+        padding: 15px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+
+      .log-output {
+        padding: 20px;
+        font-family: "Courier New", monospace;
+        font-size: 13px;
+        color: #e2e8f0;
+        max-height: 400px;
+        overflow-y: auto;
+        white-space: pre-wrap;
+        line-height: 1.4;
+      }
+
+      /* Estatísticas */
+      .stats-container {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+      }
+
+      .stat-card {
+        background: linear-gradient(135deg, #667eea, #764ba2);
+        color: white;
+        padding: 20px;
+        border-radius: 10px;
+        text-align: center;
+      }
+
+      .stat-card h3 {
+        margin-bottom: 10px;
+        font-size: 1.1rem;
+      }
+
+      .stat-numbers {
+        font-size: 1.3rem;
+        font-weight: 600;
+      }
+
+      /* Responsividade */
+      @media (max-width: 768px) {
+        .container {
+          padding: 10px;
+        }
+
+        .multi-account-section {
+          grid-template-columns: 1fr;
+        }
+
+        .batch-config {
+          grid-template-columns: 1fr;
+        }
+
+        .sync-actions {
+          grid-template-columns: 1fr;
+        }
+
+        .stats-container {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1><i class="fas fa-sync-alt"></i> Kommo Sync System</h1>
+        <p>Sistema de Sincronização Avançado com Processamento em Lotes</p>
+      </header>
+
+      <!-- Configurações de Lote -->
+      <div class="section">
+        <h2><i class="fas fa-cogs"></i> Configurações de Lote</h2>
+        <div class="batch-config">
+          <div class="config-item">
+            <label for="batchSize">Tamanho do Lote:</label>
+            <input type="number" id="batchSize" min="1" max="100" value="10" />
+            <span class="tooltip">Quantos itens processar por vez</span>
+          </div>
+          <div class="config-item">
+            <label for="batchDelay">Delay entre Lotes (segundos):</label>
+            <input
+              type="number"
+              id="batchDelay"
+              min="0"
+              max="60"
+              step="0.5"
+              value="2.0"
+            />
+            <span class="tooltip"
+              >Tempo de espera entre lotes para não sobrecarregar</span
+            >
+          </div>
+          <div class="config-item">
+            <label for="maxConcurrent">Contas Simultâneas:</label>
+            <input
+              type="number"
+              id="maxConcurrent"
+              min="1"
+              max="10"
+              value="3"
+            />
+            <span class="tooltip"
+              >Quantas contas sincronizar ao mesmo tempo</span
+            >
+          </div>
+        </div>
+      </div>
+
+      <!-- Status da Sincronização -->
+      <div class="section">
+        <h2><i class="fas fa-chart-line"></i> Status da Sincronização</h2>
+        <div id="syncStatus" class="sync-status">
+          <div class="status-item">
+            <span class="status-label">Status:</span>
+            <span id="currentStatus" class="status-value">Aguardando</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">Progresso:</span>
+            <div class="progress-container">
+              <div id="progressBar" class="progress-bar">
+                <div id="progressFill" class="progress-fill"></div>
+              </div>
+              <span id="progressText" class="progress-text">0%</span>
+            </div>
+          </div>
+          <div class="status-item">
+            <span class="status-label">Operação Atual:</span>
+            <span id="currentOperation" class="status-value">-</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">Lote:</span>
+            <span id="currentBatch" class="status-value">-</span>
+          </div>
+          <div class="status-item">
+            <span class="status-label">Tempo Estimado:</span>
+            <span id="estimatedTime" class="status-value">-</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Ações de Sincronização -->
+      <div class="section">
+        <h2><i class="fas fa-play"></i> Ações de Sincronização</h2>
+        <div class="sync-actions">
+          <button
+            id="syncAllBtn"
+            class="btn btn-primary"
+            onclick="triggerBatchSync('full')"
+          >
+            <i class="fas fa-sync-alt"></i> Sincronizar Tudo em Lotes
+          </button>
+          <button
+            id="syncPipelinesBtn"
+            class="btn btn-secondary"
+            onclick="triggerBatchSync('pipelines')"
+          >
+            <i class="fas fa-sitemap"></i> Sincronizar Pipelines
+          </button>
+          <button
+            id="syncGroupsBtn"
+            class="btn btn-secondary"
+            onclick="triggerBatchSync('field_groups')"
+          >
+            <i class="fas fa-folder"></i> Sincronizar Grupos
+          </button>
+          <button
+            id="syncFieldsBtn"
+            class="btn btn-secondary"
+            onclick="triggerBatchSync('custom_fields')"
+          >
+            <i class="fas fa-tags"></i> Sincronizar Campos
+          </button>
+          <button
+            id="syncRequiredStatusesBtn"
+            class="btn btn-secondary"
+            onclick="triggerBatchSync('required_statuses')"
+          >
+            <i class="fas fa-exclamation-triangle"></i> Sincronizar Required
+            Status
+          </button>
+          <button
+            id="stopSyncBtn"
+            class="btn btn-danger"
+            onclick="stopSync()"
+            style="display: none"
+          >
+            <i class="fas fa-stop"></i> Parar Sincronização
+          </button>
+        </div>
+      </div>
+
+      <!-- Múltiplas Contas -->
+      <div class="section">
+        <h2><i class="fas fa-users"></i> Sincronização com Múltiplas Contas</h2>
+        <div class="multi-account-section">
+          <div class="account-list">
+            <h3>Contas Escravas Configuradas:</h3>
+            <div id="slaveAccountsList" class="accounts-list">
+              <!-- Lista será preenchida via JavaScript -->
+            </div>
+            <button class="btn btn-outline" onclick="refreshAccountsList()">
+              <i class="fas fa-refresh"></i> Atualizar Lista
+            </button>
+          </div>
+          <div class="multi-sync-controls">
+            <button
+              id="syncMultipleBtn"
+              class="btn btn-primary-large"
+              onclick="triggerMultiAccountSync()"
+            >
+              <i class="fas fa-network-wired"></i> Sincronizar Todas as Contas
+            </button>
+            <div class="multi-sync-options">
+              <label>
+                <input type="checkbox" id="syncParallel" checked />
+                Sincronização Paralela (mais rápido)
+              </label>
+              <label>
+                <input type="checkbox" id="continueOnError" checked />
+                Continuar mesmo com erros
+              </label>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Logs da Sincronização -->
+      <div class="section">
+        <h2><i class="fas fa-list-alt"></i> Logs da Sincronização</h2>
+        <div class="logs-container">
+          <div class="logs-header">
+            <span style="color: white; font-weight: 600">Console de Logs</span>
+            <div>
+              <button class="btn btn-small" onclick="clearLogs()">
+                <i class="fas fa-trash"></i> Limpar
+              </button>
+              <button class="btn btn-small" onclick="downloadLogs()">
+                <i class="fas fa-download"></i> Baixar
+              </button>
+            </div>
+          </div>
+          <div id="logOutput" class="log-output">
+            Sistema pronto para sincronização...
+          </div>
+        </div>
+      </div>
+
+      <!-- Estatísticas -->
+      <div class="section">
+        <h2><i class="fas fa-chart-bar"></i> Estatísticas</h2>
+        <div id="statsContainer" class="stats-container">
+          <div class="stat-card">
+            <h3>Pipelines</h3>
+            <div class="stat-numbers">
+              <span id="pipelineStats">0 criados, 0 atualizados</span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <h3>Grupos de Campos</h3>
+            <div class="stat-numbers">
+              <span id="groupStats">0 criados, 0 atualizados</span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <h3>Campos Personalizados</h3>
+            <div class="stat-numbers">
+              <span id="fieldStats">0 criados, 0 atualizados</span>
+            </div>
+          </div>
+          <div class="stat-card">
+            <h3>Tempo Total</h3>
+            <div class="stat-numbers">
+              <span id="timeStats">0 segundos</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script src="script.js"></script>
+  </body>
+</html>
