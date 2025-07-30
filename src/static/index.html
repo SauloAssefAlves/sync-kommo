@@ -1,0 +1,1226 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kommo Sync System - Sincronização em Lotes</title>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        header h1 {
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        header p {
+            font-size: 1.1rem;
+            opacity: 0.9;
+        }
+
+        .section {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .section h2 {
+            color: #4a5568;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        /* Configurações de Lote */
+        .batch-config {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .config-item {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .config-item label {
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .config-item input {
+            padding: 10px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .config-item input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .tooltip {
+            font-size: 0.85rem;
+            color: #718096;
+            font-style: italic;
+        }
+
+        /* Visualização de Contas Master e Escravas */
+        .accounts-overview {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .overview-controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .accounts-container {
+            display: grid;
+            gap: 20px;
+        }
+
+        .accounts-container.expanded {
+            grid-template-columns: 1fr;
+        }
+
+        .accounts-container.compact {
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+        }
+
+        .master-account-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 15px;
+            padding: 20px;
+            color: white;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+        }
+
+        .master-account-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 40px rgba(0,0,0,0.15);
+        }
+
+        .master-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+
+        .master-title {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.3rem;
+            font-weight: 600;
+        }
+
+        .master-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 500;
+            background: rgba(255,255,255,0.2);
+        }
+
+        .master-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .info-item {
+            background: rgba(255,255,255,0.1);
+            padding: 10px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .info-label {
+            font-size: 0.8rem;
+            opacity: 0.8;
+            margin-bottom: 5px;
+        }
+
+        .info-value {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .slave-accounts {
+            margin-top: 15px;
+        }
+
+        .slave-accounts-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .slave-accounts-title {
+            font-size: 1.1rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .slave-count-badge {
+            background: rgba(255,255,255,0.2);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.8rem;
+        }
+
+        .slave-accounts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 10px;
+        }
+
+        .slave-account-item {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.2);
+            border-radius: 8px;
+            padding: 12px;
+            transition: background 0.3s;
+        }
+
+        .slave-account-item:hover {
+            background: rgba(255,255,255,0.15);
+        }
+
+        .slave-account-name {
+            font-weight: 500;
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .slave-account-status {
+            font-size: 0.8rem;
+            opacity: 0.8;
+        }
+
+        .more-accounts {
+            background: rgba(255,255,255,0.05) !important;
+            border: 2px dashed rgba(255,255,255,0.3) !important;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 80px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .more-accounts:hover {
+            background: rgba(255,255,255,0.1) !important;
+            border-color: rgba(255,255,255,0.5) !important;
+        }
+
+        .more-accounts-content {
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .more-accounts-content i {
+            font-size: 1.5rem;
+            opacity: 0.7;
+        }
+
+        .more-accounts-text {
+            font-size: 0.9rem;
+            font-weight: 500;
+            opacity: 0.8;
+        }
+
+        .btn-link {
+            background: none !important;
+            border: none !important;
+            color: rgba(255,255,255,0.9) !important;
+            text-decoration: underline;
+            padding: 2px 0 !important;
+            font-size: 0.8rem;
+        }
+
+        .btn-link:hover {
+            color: white !important;
+        }
+
+        /* Modal para todas as contas escravas */
+        .all-slaves-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            gap: 15px;
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+
+        .slave-detail-card {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 10px;
+            padding: 15px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .slave-detail-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        .slave-detail-header {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+
+        .slave-detail-name {
+            font-weight: 600;
+            color: #495057;
+            font-size: 1.1rem;
+        }
+
+        .slave-detail-info {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            font-size: 0.9rem;
+            color: #6c757d;
+        }
+
+        .slave-info-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .slave-info-label {
+            font-weight: 500;
+            margin-bottom: 2px;
+        }
+
+        .slave-info-value {
+            color: #495057;
+        }
+
+        .no-accounts-message {
+            text-align: center;
+            padding: 40px;
+            color: #718096;
+            font-style: italic;
+        }
+
+        .empty-state {
+            background: #f7fafc;
+            border: 2px dashed #e2e8f0;
+            border-radius: 10px;
+            padding: 30px;
+            text-align: center;
+            color: #718096;
+        }
+
+        .empty-state i {
+            font-size: 3rem;
+            margin-bottom: 15px;
+            opacity: 0.5;
+        }
+
+        /* Gerenciamento de Grupos */
+        .groups-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .group-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .group-selector {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .group-selector label {
+            font-weight: 600;
+            color: #4a5568;
+            min-width: 100px;
+        }
+
+        .group-selector select {
+            padding: 10px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 16px;
+            min-width: 200px;
+            transition: border-color 0.3s;
+        }
+
+        .group-selector select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .group-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .group-info {
+            background: #f7fafc;
+            border: 2px solid #e2e8f0;
+            border-radius: 10px;
+            padding: 20px;
+            margin-top: 15px;
+        }
+
+        .group-details h3 {
+            color: #2d3748;
+            margin-bottom: 10px;
+            font-size: 1.3rem;
+        }
+
+        .group-details p {
+            color: #4a5568;
+            margin-bottom: 15px;
+            line-height: 1.5;
+        }
+
+        .group-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .stat-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #e2e8f0;
+        }
+
+        .stat-label {
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .stat-value {
+            color: #2d3748;
+            font-weight: 500;
+        }
+
+        /* Status da Sincronização */
+        .sync-status {
+            display: grid;
+            gap: 15px;
+        }
+
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .status-item:last-child {
+            border-bottom: none;
+        }
+
+        .status-label {
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .status-value {
+            color: #2d3748;
+            font-weight: 500;
+        }
+
+        .progress-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex: 1;
+            max-width: 300px;
+        }
+
+        .progress-bar {
+            flex: 1;
+            height: 20px;
+            background-color: #e2e8f0;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+
+        .progress-text {
+            font-weight: 600;
+            color: #4a5568;
+            min-width: 45px;
+        }
+
+        /* Botões */
+        .btn {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 14px;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            text-decoration: none;
+            margin: 5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f7fafc;
+            color: #4a5568;
+            border: 2px solid #e2e8f0;
+        }
+
+        .btn-secondary:hover {
+            background: #edf2f7;
+            border-color: #cbd5e0;
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, #f56565, #e53e3e);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(245, 101, 101, 0.4);
+        }
+
+        .btn-primary-large {
+            background: linear-gradient(135deg, #48bb78, #38a169);
+            color: white;
+            font-size: 16px;
+            padding: 16px 32px;
+        }
+
+        .btn-primary-large:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 35px rgba(72, 187, 120, 0.4);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 2px solid #667eea;
+            color: #667eea;
+        }
+
+        .btn-outline:hover {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+            box-shadow: none !important;
+        }
+
+        /* Ações de Sincronização */
+        .sync-actions {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        /* Múltiplas Contas */
+        .multi-account-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+
+        .account-list {
+            background: #f7fafc;
+            padding: 20px;
+            border-radius: 10px;
+        }
+
+        .account-list h3 {
+            margin-bottom: 15px;
+            color: #4a5568;
+        }
+
+        .accounts-list {
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .account-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .account-info strong {
+            color: #2d3748;
+        }
+
+        .account-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .account-status.online {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+
+        .account-status.offline {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+
+        .account-status.error {
+            background: #fbb6ce;
+            color: #702459;
+        }
+
+        .account-actions {
+            display: flex;
+            gap: 5px;
+        }
+
+        .multi-sync-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .multi-sync-options {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .multi-sync-options label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            color: #4a5568;
+        }
+
+        /* Logs */
+        .logs-container {
+            background: #1a202c;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .logs-header {
+            background: #2d3748;
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .log-output {
+            padding: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+            color: #e2e8f0;
+            max-height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            line-height: 1.4;
+        }
+
+        /* Estatísticas */
+        .stats-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .stat-card h3 {
+            margin-bottom: 10px;
+            font-size: 1.1rem;
+        }
+
+        .stat-numbers {
+            font-size: 1.3rem;
+            font-weight: 600;
+        }
+
+        /* Responsividade */
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+
+            .multi-account-section {
+                grid-template-columns: 1fr;
+            }
+
+            .batch-config {
+                grid-template-columns: 1fr;
+            }
+
+            .sync-actions {
+                grid-template-columns: 1fr;
+            }
+
+            .stats-container {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        /* Modal Styles */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(5px);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 20px 25px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .modal-header h3 {
+            color: #2d3748;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            color: #718096;
+            cursor: pointer;
+            padding: 5px;
+            line-height: 1;
+            transition: color 0.3s;
+        }
+
+        .modal-close:hover {
+            color: #e53e3e;
+        }
+
+        .modal-body {
+            padding: 25px;
+        }
+
+        .modal-footer {
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            padding: 20px 25px;
+            border-top: 1px solid #e2e8f0;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .form-group input,
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+
+        .form-help {
+            font-size: 0.85rem;
+            color: #718096;
+            margin-top: 5px;
+            display: block;
+        }
+
+        .form-group label input[type="checkbox"] {
+            width: auto;
+            margin-right: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><i class="fas fa-sync-alt"></i> Kommo Sync System</h1>
+            <p>Sistema de Sincronização Avançado com Processamento em Lotes e Grupos</p>
+        </header>
+
+        <!-- Visualização de Contas Master e Escravas -->
+        <div class="section">
+            <h2><i class="fas fa-network-wired"></i> Visão Geral de Contas</h2>
+            <div class="accounts-overview">
+                <div class="overview-controls">
+                    <button class="btn btn-primary" onclick="refreshAccountsOverview()">
+                        <i class="fas fa-refresh"></i> Atualizar Visão Geral
+                    </button>
+                    <button class="btn btn-secondary" onclick="toggleViewMode()">
+                        <i class="fas fa-exchange-alt"></i> <span id="viewModeText">Modo Compacto</span>
+                    </button>
+                </div>
+                <div id="accountsOverviewContainer" class="accounts-container">
+                    <!-- Contas serão renderizadas aqui -->
+                </div>
+            </div>
+        </div>
+
+        <!-- Gerenciamento de Grupos -->
+        <div class="section">
+            <h2><i class="fas fa-layer-group"></i> Gerenciamento de Grupos</h2>
+            <div class="groups-container">
+                <div class="group-controls">
+                    <div class="group-selector">
+                        <label for="groupSelect">Grupo Ativo:</label>
+                        <select id="groupSelect">
+                            <option value="">Selecione um grupo...</option>
+                        </select>
+                        <button class="btn btn-secondary" onclick="refreshGroups()">
+                            <i class="fas fa-refresh"></i> Atualizar
+                        </button>
+                    </div>
+                    <div class="group-actions">
+                        <button class="btn btn-primary" onclick="showCreateGroupModal()">
+                            <i class="fas fa-plus"></i> Novo Grupo
+                        </button>
+                        <button class="btn btn-secondary" onclick="showGroupDetails()" id="detailsBtn" disabled>
+                            <i class="fas fa-info-circle"></i> Detalhes
+                        </button>
+                        <button class="btn btn-primary" onclick="syncGroup()" id="syncGroupBtn" disabled>
+                            <i class="fas fa-sync"></i> Sincronizar Grupo
+                        </button>
+                    </div>
+                </div>
+                
+                <div id="groupInfo" class="group-info" style="display: none;">
+                    <div class="group-details">
+                        <h3 id="groupName">Nome do Grupo</h3>
+                        <p id="groupDescription">Descrição do grupo</p>
+                        <div class="group-stats">
+                            <div class="stat-item">
+                                <span class="stat-label">Conta Mestre:</span>
+                                <span id="masterAccount" class="stat-value">-</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">Contas Escravas:</span>
+                                <span id="slaveCount" class="stat-value">0</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Configurações de Lote -->
+        <div class="section">
+            <h2><i class="fas fa-cogs"></i> Configurações de Lote</h2>
+            <div class="batch-config">
+                <div class="config-item">
+                    <label for="batchSize">Tamanho do Lote:</label>
+                    <input type="number" id="batchSize" min="1" max="100" value="10">
+                    <span class="tooltip">Quantos itens processar por vez</span>
+                </div>
+                <div class="config-item">
+                    <label for="batchDelay">Delay entre Lotes (segundos):</label>
+                    <input type="number" id="batchDelay" min="0" max="60" step="0.5" value="2.0">
+                    <span class="tooltip">Tempo de espera entre lotes para não sobrecarregar</span>
+                </div>
+                <div class="config-item">
+                    <label for="maxConcurrent">Contas Simultâneas:</label>
+                    <input type="number" id="maxConcurrent" min="1" max="10" value="3">
+                    <span class="tooltip">Quantas contas sincronizar ao mesmo tempo</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Status da Sincronização -->
+        <div class="section">
+            <h2><i class="fas fa-chart-line"></i> Status da Sincronização</h2>
+            <div id="syncStatus" class="sync-status">
+                <div class="status-item">
+                    <span class="status-label">Status:</span>
+                    <span id="currentStatus" class="status-value">Aguardando</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Progresso:</span>
+                    <div class="progress-container">
+                        <div id="progressBar" class="progress-bar">
+                            <div id="progressFill" class="progress-fill"></div>
+                        </div>
+                        <span id="progressText" class="progress-text">0%</span>
+                    </div>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Operação Atual:</span>
+                    <span id="currentOperation" class="status-value">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Lote:</span>
+                    <span id="currentBatch" class="status-value">-</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-label">Tempo Estimado:</span>
+                    <span id="estimatedTime" class="status-value">-</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Ações de Sincronização -->
+        <div class="section">
+            <h2><i class="fas fa-play"></i> Ações de Sincronização</h2>
+            <div class="sync-actions">
+                <button id="syncAllBtn" class="btn btn-primary" onclick="triggerBatchSync('full')">
+                    <i class="fas fa-sync-alt"></i> Sincronizar Tudo em Lotes
+                </button>
+                <button id="syncPipelinesBtn" class="btn btn-secondary" onclick="triggerBatchSync('pipelines')">
+                    <i class="fas fa-sitemap"></i> Sincronizar Pipelines
+                </button>
+                <button id="syncGroupsBtn" class="btn btn-secondary" onclick="triggerBatchSync('field_groups')">
+                    <i class="fas fa-folder"></i> Sincronizar Grupos
+                </button>
+                <button id="syncFieldsBtn" class="btn btn-secondary" onclick="triggerBatchSync('custom_fields')">
+                    <i class="fas fa-tags"></i> Sincronizar Campos
+                </button>
+                <button id="syncRequiredStatusesBtn" class="btn btn-secondary" onclick="triggerBatchSync('required_statuses')">
+                    <i class="fas fa-exclamation-triangle"></i> Sincronizar Required Status
+                </button>
+                <button id="stopSyncBtn" class="btn btn-danger" onclick="stopSync()" style="display: none;">
+                    <i class="fas fa-stop"></i> Parar Sincronização
+                </button>
+            </div>
+        </div>
+
+        <!-- Múltiplas Contas -->
+        <div class="section">
+            <h2><i class="fas fa-users"></i> Sincronização com Múltiplas Contas</h2>
+            <div class="multi-account-section">
+                <div class="account-list">
+                    <h3>Contas Escravas Configuradas:</h3>
+                    <div id="slaveAccountsList" class="accounts-list">
+                        <!-- Lista será preenchida via JavaScript -->
+                    </div>
+                    <button class="btn btn-outline" onclick="refreshAccountsList()">
+                        <i class="fas fa-refresh"></i> Atualizar Lista
+                    </button>
+                </div>
+                <div class="multi-sync-controls">
+                    <button id="syncMultipleBtn" class="btn btn-primary-large" onclick="triggerMultiAccountSync()">
+                        <i class="fas fa-network-wired"></i> Sincronizar Todas as Contas
+                    </button>
+                    <div class="multi-sync-options">
+                        <label>
+                            <input type="checkbox" id="syncParallel" checked>
+                            Sincronização Paralela (mais rápido)
+                        </label>
+                        <label>
+                            <input type="checkbox" id="continueOnError" checked>
+                            Continuar mesmo com erros
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Logs da Sincronização -->
+        <div class="section">
+            <h2><i class="fas fa-list-alt"></i> Logs da Sincronização</h2>
+            <div class="logs-container">
+                <div class="logs-header">
+                    <span style="color: white; font-weight: 600;">Console de Logs</span>
+                    <div>
+                        <button class="btn btn-small" onclick="clearLogs()">
+                            <i class="fas fa-trash"></i> Limpar
+                        </button>
+                        <button class="btn btn-small" onclick="downloadLogs()">
+                            <i class="fas fa-download"></i> Baixar
+                        </button>
+                    </div>
+                </div>
+                <div id="logOutput" class="log-output">Sistema pronto para sincronização...</div>
+            </div>
+        </div>
+
+        <!-- Estatísticas -->
+        <div class="section">
+            <h2><i class="fas fa-chart-bar"></i> Estatísticas</h2>
+            <div id="statsContainer" class="stats-container">
+                <div class="stat-card">
+                    <h3>Pipelines</h3>
+                    <div class="stat-numbers">
+                        <span id="pipelineStats">0 criados, 0 atualizados</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <h3>Grupos de Campos</h3>
+                    <div class="stat-numbers">
+                        <span id="groupStats">0 criados, 0 atualizados</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <h3>Campos Personalizados</h3>
+                    <div class="stat-numbers">
+                        <span id="fieldStats">0 criados, 0 atualizados</span>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <h3>Tempo Total</h3>
+                    <div class="stat-numbers">
+                        <span id="timeStats">0 segundos</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Criar Grupo -->
+    <div id="createGroupModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-plus-circle"></i> Criar Novo Grupo</h3>
+                <button class="modal-close" onclick="hideCreateGroupModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="info-box" style="background: #f0f9ff; border: 1px solid #0ea5e9; border-radius: 8px; padding: 15px; margin-bottom: 20px;">
+                    <h4 style="margin: 0 0 10px 0; color: #0369a1;">
+                        <i class="fas fa-info-circle"></i> Como criar um grupo
+                    </h4>
+                    <p style="margin: 0; color: #0369a1; font-size: 0.9rem;">
+                        1. Defina um nome para o grupo<br>
+                        2. Selecione ou crie uma conta mestre<br>
+                        3. Após criar o grupo, adicione contas escravas
+                    </p>
+                </div>
+                
+                <form id="createGroupForm">
+                    <div class="form-group">
+                        <label for="groupNameInput">Nome do Grupo:</label>
+                        <input type="text" id="groupNameInput" required placeholder="Ex: E-commerce Principal">
+                    </div>
+                    <div class="form-group">
+                        <label for="groupDescriptionInput">Descrição:</label>
+                        <textarea id="groupDescriptionInput" rows="3" placeholder="Descrição opcional do grupo"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="masterAccountSelect">Conta Mestre:</label>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <select id="masterAccountSelect" style="flex: 1;">
+                                <option value="">Selecione uma conta mestre...</option>
+                            </select>
+                            <button type="button" class="btn btn-secondary" onclick="showCreateMasterAccountModal()" style="white-space: nowrap;">
+                                <i class="fas fa-plus"></i> Nova Conta
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="hideCreateGroupModal()">Cancelar</button>
+                <button class="btn btn-primary" onclick="createGroup()">
+                    <i class="fas fa-save"></i> Criar Grupo
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para Criar Conta Mestre -->
+    <div id="createMasterAccountModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-crown"></i> Adicionar Nova Conta Mestre</h3>
+                <button class="modal-close" onclick="hideCreateMasterAccountModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="createMasterAccountForm">
+                    <div class="form-group">
+                        <label for="masterSubdomainInput">Subdomínio:</label>
+                        <input type="text" id="masterSubdomainInput" required placeholder="Ex: minhaempresa">
+                        <small class="form-help">Digite apenas o subdomínio sem .kommo.com</small>
+                    </div>
+                    <div class="form-group">
+                        <label for="masterRefreshTokenInput">Refresh Token:</label>
+                        <textarea id="masterRefreshTokenInput" required rows="3" placeholder="Cole aqui o refresh token da conta Kommo"></textarea>
+                        <small class="form-help">Obtenha o refresh token através da integração OAuth do Kommo</small>
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="testConnectionCheckbox" checked>
+                            Testar conexão antes de salvar
+                        </label>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="hideCreateMasterAccountModal()">Cancelar</button>
+                <button class="btn btn-primary" onclick="createMasterAccount()">
+                    <i class="fas fa-save"></i> Adicionar Conta
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal para mostrar todas as contas escravas -->
+    <div id="allSlaveAccountsModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="slaveModalTitle">Todas as Contas Escravas</h3>
+                <button class="modal-close" onclick="hideAllSlaveAccountsModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="allSlaveAccountsList" class="all-slaves-container">
+                    <!-- Contas serão carregadas aqui -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="hideAllSlaveAccountsModal()">Fechar</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script></script>
+</body>
+</html>
