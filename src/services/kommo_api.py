@@ -474,18 +474,9 @@ class KommoSyncService:
                         
                         processed_stage_index = 0  # Contador para estágios realmente processados
                         for i, master_stage in enumerate(master_pipeline['stages']):
-                            # Pular estágios com type=1 (incoming leads) - serão criados automaticamente pelo Kommo
-                            if master_stage.get('type', 0) == 1:
-                                logger.info(f"🚫 Pulando estágio type=1 '{master_stage['name']}' - será criado automaticamente pelo Kommo")
-                                continue
-                            
-                            # Verificar se é um estágio especial do sistema (Won=142, Lost=143)
-                            default_stage_id = self._get_default_stage_id(master_stage['name'], master_stage.get('type', 0))
-                            is_system_stage = default_stage_id in [142, 143]
-                            
-                            # Pular estágios especiais (Won=142, Lost=143) - serão gerenciados pelo Kommo
-                            if is_system_stage:
-                                logger.info(f"🚫 Pulando estágio especial '{master_stage['name']}' (ID {default_stage_id}) - será gerenciado automaticamente pelo Kommo")
+                            # IGNORAR COMPLETAMENTE estágios especiais (IDs 142/143, type=1, etc.)
+                            if self._should_ignore_stage(master_stage):
+                                logger.info(f"🚫 Ignorando estágio especial '{master_stage['name']}' - será gerenciado automaticamente pelo Kommo")
                                 continue
                                 
                             stage_data = {
@@ -527,42 +518,20 @@ class KommoSyncService:
                         if 'stages' not in mappings:
                             mappings['stages'] = {}
                         
-                        # Mapear apenas os estágios que foram realmente enviados (excluindo type=1 e especiais)
+                        # Mapear estágios criados - APENAS os que foram realmente enviados (ignorando especiais)
                         created_stage_index = 0
                         for master_stage in master_pipeline['stages']:
-                            # Pular estágios type=1 no mapeamento
-                            if master_stage.get('type', 0) == 1:
-                                # Para estágios type=1, mapear para o estágio automático criado pelo Kommo
-                                # Buscar o estágio type=1 nos estágios criados
-                                for created_stage in created_stages:
-                                    if created_stage.get('type') == 1:
-                                        master_stage_id = master_stage['id']
-                                        mappings['stages'][master_stage_id] = created_stage['id']
-                                        logger.info(f"🆔 Mapeando estágio type=1 '{master_stage['name']}' para ID automático {created_stage['id']}")
-                                        break
+                            # IGNORAR COMPLETAMENTE estágios especiais no mapeamento
+                            if self._should_ignore_stage(master_stage):
+                                logger.debug(f"🚫 Ignorando mapeamento do estágio especial '{master_stage['name']}' - gerenciado pelo Kommo")
                                 continue
                             
-                            # Pular estágios especiais (142, 143) no mapeamento
-                            default_stage_id = self._get_default_stage_id(master_stage['name'], master_stage.get('type', 0))
-                            if default_stage_id in [142, 143]:
-                                # Mapear para os IDs especiais criados automaticamente pelo Kommo
-                                for created_stage in created_stages:
-                                    if created_stage.get('id') == default_stage_id:
-                                        master_stage_id = master_stage['id']
-                                        mappings['stages'][master_stage_id] = default_stage_id
-                                        logger.info(f"🆔 Mapeando estágio especial '{master_stage['name']}' para ID do sistema {default_stage_id}")
-                                        break
-                                continue
-                            
-                            # Mapear estágios normais
+                            # Mapear estágios normais para IDs gerados pela API
                             if created_stage_index < len(created_stages):
-                                # Usar ID gerado pela API
                                 slave_stage_id = created_stages[created_stage_index]['id']
-                                logger.info(f"✅ Mapeando estágio '{master_stage['name']}' para ID gerado {slave_stage_id}")
-                                
-                                # Usar ID do master stage
                                 master_stage_id = master_stage['id']
                                 mappings['stages'][master_stage_id] = slave_stage_id
+                                logger.info(f"✅ Mapeando estágio '{master_stage['name']}' -> ID slave {slave_stage_id}")
                                 created_stage_index += 1
                     
                     # Armazenar mapeamento do pipeline
@@ -707,18 +676,9 @@ class KommoSyncService:
                 stage_type = master_stage.get('type', 0)
                 logger.info(f"🔄 Processando estágio {i+1}/{len(master_pipeline['stages'])}: '{stage_name}' (type: {stage_type})")
                 
-                # Pular estágios com type=1 (incoming leads) - serão criados automaticamente pelo Kommo
-                if stage_type == 1:
-                    logger.info(f"🚫 Pulando estágio type=1 '{stage_name}' - será criado automaticamente pelo Kommo")
-                    continue
-                
-                # Verificar se é um estágio especial do sistema (Won=142, Lost=143)
-                default_stage_id = self._get_default_stage_id(stage_name, stage_type)
-                is_system_stage = default_stage_id in [142, 143]
-                
-                # Pular estágios especiais (Won=142, Lost=143) - serão gerenciados pelo Kommo
-                if is_system_stage:
-                    logger.info(f"🚫 Pulando estágio especial '{stage_name}' (ID {default_stage_id}) - será gerenciado automaticamente pelo Kommo")
+                # IGNORAR COMPLETAMENTE estágios especiais (IDs 142/143, type=1, etc.)
+                if self._should_ignore_stage(master_stage):
+                    logger.info(f"🚫 Ignorando estágio especial '{stage_name}' - será gerenciado automaticamente pelo Kommo")
                     continue
                 
                 # Preparar dados do estágio sem IDs da conta mestre
@@ -776,9 +736,16 @@ class KommoSyncService:
         stages_to_delete = []
         for slave_stage_name, slave_stage in existing_stages.items():
             if slave_stage_name not in master_stage_names:
-                # Verificar se não é um estágio especial do sistema (como "Fechado - ganho", "Fechado - perdido")
-                if not self._is_system_stage(slave_stage):
+                logger.debug(f"🔍 Estágio '{slave_stage_name}' não existe na master - verificando se deve ser ignorado...")
+                
+                # IGNORAR COMPLETAMENTE estágios especiais - nunca tentar excluir
+                if self._should_ignore_stage(slave_stage):
+                    logger.info(f"� Estágio especial '{slave_stage_name}' (ID: {slave_stage.get('id')}) será mantido - gerenciado automaticamente pelo Kommo")
+                else:
+                    logger.info(f"� Estágio '{slave_stage_name}' será excluído (não é especial)")
                     stages_to_delete.append(slave_stage)
+            else:
+                logger.debug(f"✅ Estágio '{slave_stage_name}' existe na master - mantendo")
         
         if stages_to_delete:
             logger.info(f"🗑️ Encontrados {len(stages_to_delete)} estágios para excluir do pipeline '{master_pipeline['name']}'")
@@ -786,6 +753,7 @@ class KommoSyncService:
                 try:
                     stage_name = stage_to_delete['name']
                     stage_id = stage_to_delete['id']
+                    
                     logger.info(f"🗑️ Excluindo estágio '{stage_name}' (ID: {stage_id}) da slave")
                     
                     # Chamar API para deletar o estágio
@@ -798,6 +766,10 @@ class KommoSyncService:
                         
                 except Exception as e:
                     error_str = str(e).lower()
+                    stage_name = stage_to_delete.get('name', 'Desconhecido')
+                    stage_id = stage_to_delete.get('id', 'N/A')
+                    
+                    # Verificar se é erro 404 - estágio já foi removido
                     if any(phrase in error_str for phrase in ['not found', '404', 'does not exist']):
                         logger.info(f"ℹ️ Estágio '{stage_name}' já foi removido ou não existe")
                     else:
@@ -806,32 +778,44 @@ class KommoSyncService:
         else:
             logger.info(f"✅ Nenhum estágio excedente encontrado no pipeline '{master_pipeline['name']}'")
     
-    def _is_system_stage(self, stage: Dict) -> bool:
-        """Verifica se um estágio é um estágio especial do sistema (Won=142, Lost=143, Incoming=1)"""
+    def _should_ignore_stage(self, stage: Dict) -> bool:
+        """
+        Verifica se um estágio deve ser completamente ignorado durante a sincronização.
+        Estágios especiais do sistema (Won=142, Lost=143) são gerenciados automaticamente pelo Kommo.
+        """
         stage_id = stage.get('id')
         stage_type = stage.get('type', 0)
         stage_name = stage.get('name', '').lower()
         
-        # Verificar por ID direto
-        if stage_id in [1, 142, 143]:
+        # REGRA 1: Ignorar por ID direto (MAIS IMPORTANTE)
+        if stage_id in [142, 143]:
+            logger.debug(f"🚫 Ignorando estágio por ID especial: {stage_id} - '{stage_name}'")
             return True
             
-        # Verificar por tipo
-        if stage_type == 1:  # Incoming leads
+        # REGRA 2: Ignorar estágios type=1 (incoming leads) - criados automaticamente
+        if stage_type == 1:
+            logger.debug(f"🚫 Ignorando estágio type=1: '{stage_name}' - criado automaticamente pelo Kommo")
             return True
             
-        # Verificar por nome (padrões conhecidos)
-        system_patterns = [
+        # REGRA 3: Ignorar por nome (padrões conhecidos de estágios especiais)
+        special_patterns = [
             'incoming leads', 'incoming', 'etapa de leads de entrada', 'leads de entrada', 'entrada',
-            'won', 'ganho', 'ganha', 'venda ganha', 'fechado - ganho', 'closed - won', 'successful', 'sucesso',
-            'lost', 'perdido', 'perdida', 'venda perdida', 'fechado - perdido', 'closed - lost', 'unsuccessful', 'fracasso'
+            'venda ganha', 'fechado - ganho', 'closed - won', 'won', 'successful', 'sucesso',
+            'venda perdida', 'fechado - perdido', 'closed - lost', 'lost', 'unsuccessful', 'fracasso'
         ]
         
-        for pattern in system_patterns:
+        for pattern in special_patterns:
             if pattern in stage_name:
+                logger.debug(f"🚫 Ignorando estágio por padrão de nome: '{pattern}' em '{stage_name}'")
                 return True
                 
         return False
+    def _is_system_stage(self, stage: Dict) -> bool:
+        """
+        Verifica se um estágio é um estágio especial do sistema (Won=142, Lost=143, Incoming=1)
+        NOTA: Esta função é mantida para compatibilidade. Use _should_ignore_stage() para novo código.
+        """
+        return self._should_ignore_stage(stage)
 
     def _get_default_stage_id(self, stage_name: str, stage_type: int) -> int:
         """Retorna o ID padrão do Kommo para estágios especiais (Incoming=1, Won=142, Lost=143)"""
@@ -968,27 +952,6 @@ class KommoSyncService:
         except Exception as e:
             logger.error(f"❌ Erro ao carregar mapeamentos do banco: {e}")
             return {'pipelines': {}, 'stages': {}, 'custom_field_groups': {}}
-
-    def _is_system_stage(self, stage: Dict) -> bool:
-        """Verifica se um estágio é um estágio especial do sistema que não deve ser excluído"""
-        stage_name = stage.get('name', '').lower()
-        system_stage_patterns = [
-            'incoming leads', 'incoming', 'etapa de leads de entrada', 'leads de entrada', 'entrada',
-            'fechado - ganho', 'fechado - perdido', 'closed - won', 'closed - lost',
-            'won', 'lost', 'ganho', 'perdido', 'successful', 'unsuccessful'
-        ]
-        
-        # Verificar se o nome do estágio contém algum padrão de estágio do sistema
-        for pattern in system_stage_patterns:
-            if pattern in stage_name:
-                return True
-        
-        # Verificar se é um estágio com tipo especial (geralmente 0 = normal, 1 = ganho, 2 = perda)
-        stage_type = stage.get('type', 0)
-        if stage_type in [1, 2]:  # Tipos especiais de conclusão
-            return True
-            
-        return False
     
     def _sync_automatic_stage_names(self, slave_api: KommoAPIService, master_pipeline: Dict, slave_pipeline_id: int):
         """
