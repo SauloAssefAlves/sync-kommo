@@ -435,6 +435,14 @@ class KommoSyncService:
                             '#eb93ff', '#f2f3f4', '#e6e8ea'
                         ]
                         
+                        def get_valid_kommo_color(master_color, fallback_index):
+                            """Retorna uma cor válida do Kommo baseada na cor da master ou fallback"""
+                            if master_color and master_color.lower() in [c.lower() for c in kommo_colors]:
+                                return master_color
+                            else:
+                                # Se a cor da master não é válida, usar cor do índice como fallback
+                                return kommo_colors[fallback_index % len(kommo_colors)]
+                        
                         for i, master_stage in enumerate(master_pipeline['stages']):
                             # Pular estágios com type=1 (incoming leads) - serão criados automaticamente pelo Kommo
                             if master_stage.get('type', 0) == 1:
@@ -456,10 +464,11 @@ class KommoSyncService:
                                 stage_data['id'] = master_stage['default_id']
                                 logger.info(f"🆔 Incluindo ID {master_stage['default_id']} para estágio '{master_stage['name']}' na criação do pipeline")
                             
-                            # Usar a cor do stage da master ou cor padrão se não estiver definida
-                            master_color = master_stage.get('color', kommo_colors[i % len(kommo_colors)])
-                            stage_data['color'] = master_color
-                            logger.debug(f"Estágio '{master_stage['name']}' usando cor da master '{master_color}'")
+                            # Usar a cor do stage da master validada
+                            master_color = master_stage.get('color')
+                            valid_color = get_valid_kommo_color(master_color, i)
+                            stage_data['color'] = valid_color
+                            logger.debug(f"Estágio '{master_stage['name']}' - Cor master: '{master_color}' -> Cor válida: '{valid_color}'")
                             stages_data.append(stage_data)
                         
                         pipeline_data = {
@@ -613,6 +622,14 @@ class KommoSyncService:
             '#eb93ff', '#f2f3f4', '#e6e8ea'
         ]
         
+        def get_valid_kommo_color(master_color, fallback_index):
+            """Retorna uma cor válida do Kommo baseada na cor da master ou fallback"""
+            if master_color and master_color.lower() in [c.lower() for c in kommo_colors]:
+                return master_color
+            else:
+                # Se a cor da master não é válida, usar cor do índice como fallback
+                return kommo_colors[fallback_index % len(kommo_colors)]
+        
         # FASE 1: Criar/Atualizar estágios da master que estão faltando na slave
         for i, master_stage in enumerate(master_pipeline['stages']):
             try:
@@ -633,9 +650,10 @@ class KommoSyncService:
                 }
                 
                 # Usar a cor do stage da master ou cor padrão se não estiver definida
-                master_color = master_stage.get('color', kommo_colors[i % len(kommo_colors)])
-                stage_data['color'] = master_color
-                logger.debug(f"Estágio '{stage_name}' usando cor da master '{master_color}' (índice {i})")
+                master_color = master_stage.get('color')
+                valid_color = get_valid_kommo_color(master_color, i)
+                stage_data['color'] = valid_color
+                logger.debug(f"Estágio '{stage_name}' - Cor master: '{master_color}' -> Cor válida: '{valid_color}' (índice {i})")
                 
                 # Verificar se estágio já existe (verificação detalhada)
                 stage_exists = stage_name in existing_stages
