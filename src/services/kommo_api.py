@@ -1266,11 +1266,9 @@ class KommoSyncService:
                                 
                                 logger.info(f"   🔍 Processando: pipeline={master_pipeline_id}, status={master_status_id}")
                                 
-                                # Verificar se é um estágio especial que deve ser ignorado
-                                stage_info = {'id': master_status_id}  # Criar objeto mínimo para teste
-                                if self._should_ignore_stage(stage_info):
-                                    logger.info(f"   🚫 Ignorando required_status com estágio especial {master_status_id} - gerenciado pelo Kommo")
-                                    continue
+                                # Para required_statuses, INCLUIR todos os estágios, incluindo 142 e 143
+                                # Estes estágios podem ser necessários como required_statuses em determinadas situações
+                                logger.debug(f"   � Incluindo required_status (sem ignore): status_id={master_status_id}")
                                 
                                 # Mapear pipeline_id da master para escrava
                                 if master_pipeline_id and master_pipeline_id in mappings.get('pipelines', {}):
@@ -1618,6 +1616,19 @@ class KommoSyncService:
                                     logger.debug(f"Enums existentes: {sorted(existing_values)}")
                                     logger.debug(f"Novos enums: {sorted(new_values)}")
                             
+                            # Verificar se currency mudou (para campos monetários)
+                            if field_type == 'price':
+                                existing_currency = existing_field.get('currency')
+                                new_currency = master_field.get('currency', 'USD')
+                                if existing_currency != new_currency:
+                                    update_data['currency'] = new_currency
+                                    needs_update = True
+                                    logger.info(f"💰 Currency do campo '{field_name}' será atualizada: {existing_currency} -> {new_currency}")
+                                elif 'currency' not in update_data:
+                                    # Sempre incluir currency em atualizações de campos monetários
+                                    update_data['currency'] = new_currency
+                                    logger.debug(f"💰 Currency mantida para campo monetário '{field_name}': {new_currency}")
+                            
                             # Verificar se o tipo mudou - FORÇAR atualização se os dados estão diferentes
                             if existing_field['type'] != field_type:
                                 logger.warning(f"Tipo do campo '{field_name}' é diferente (existente: {existing_field['type']}, novo: {field_type}). Tipos não podem ser alterados via API, mas forçando outras atualizações.")
@@ -1739,10 +1750,10 @@ class KommoSyncService:
                                 
                             except Exception as fallback_error:
                                 logger.error(f"❌ Fallback também falhou: {fallback_error}")
-                                results['errors'] += 1
+                                results['errors'].append(f"Fallback falhou para campo '{master_field['name']}': {fallback_error}")
                         else:
                             logger.error(error_msg)
-                            results['errors'] += 1
+                            results['errors'].append(error_msg)
                         
                         if progress_callback:
                             progress_callback(f"❌ Erro no campo '{master_field['name']}': {e}")
