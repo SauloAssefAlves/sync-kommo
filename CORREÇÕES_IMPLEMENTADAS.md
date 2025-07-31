@@ -75,6 +75,32 @@
   }
   ```
 
+## 7. 💰 CORREÇÃO CAMPO MONETÁRIO (NOVO)
+
+- **Problema**: Campo 'moeda' falhava com erro "This field is missing: currency"
+- **Solução**: Expandir tratamento de currency para campos 'monetary' além de 'price'
+- **Implementação**:
+  ```python
+  # ANTES: if field_type == 'price':
+  # DEPOIS: if field_type in ['price', 'monetary']:
+  if field_type in ['price', 'monetary']:
+      update_data['currency'] = master_field.get('currency', 'USD')
+  ```
+
+## 8. 🛡️ TRATAMENTO ROBUSTO DE GRUPOS (NOVO)
+
+- **Problema**: Erro "string indices must be integers, not 'str'" quando groups_results não é dict
+- **Solução**: Verificação de tipo antes de acessar propriedades
+- **Implementação**:
+  ```python
+  if isinstance(groups_results, dict):
+      results['groups_created'] = groups_results['created']
+  else:
+      # Fallback seguro
+      results['groups_created'] = 0
+      results['groups_errors'] = [f"Erro: {groups_results}"]
+  ```
+
 ---
 
 ## 🎯 COMPORTAMENTO CONTEXTUAL FINAL
@@ -117,12 +143,15 @@
 4. **Campos monetários incluem currency** automaticamente
 5. **Validação real de IDs** via API do Kommo
 6. **Tratamento padronizado de erros**
+7. **Campos 'monetary' agora incluem currency** (correção do campo 'moeda')
+8. **Tratamento robusto de grupos** evita erro 'string indices must be integers'
 
 ### 🎯 SISTEMA ATUAL:
 
 - **Inteligente**: Distingue contexto de sincronização vs required_statuses
-- **Robusto**: Não falha com estágios especiais ou cores inválidas
+- **Robusto**: Não falha com estágios especiais, cores inválidas ou grupos problemáticos
 - **Completo**: Valida dados reais via API antes de processar
 - **Confiável**: Tratamento consistente de erros e fallbacks
+- **Monetário**: Suporte completo para campos 'price' e 'monetary' com currency
 
-### 🎊 STATUS: **TODAS AS CORREÇÕES IMPLEMENTADAS E TESTADAS COM SUCESSO!**
+### 🎊 STATUS: **TODAS AS 8 CORREÇÕES IMPLEMENTADAS E TESTADAS COM SUCESSO!**

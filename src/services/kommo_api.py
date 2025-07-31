@@ -1170,14 +1170,24 @@ class KommoSyncService:
         # PRIMEIRO: Sincronizar grupos de campos (dependência obrigatória)
         logger.info("🔄 Sincronizando grupos de campos automaticamente antes dos campos...")
         groups_results = self.sync_custom_field_groups_to_slave(slave_api, master_config, mappings, progress_callback)
-        logger.info(f"Grupos sincronizados: {groups_results['created']} criados, {groups_results['updated']} atualizados, {groups_results['skipped']} ignorados, {groups_results['deleted']} deletados")
         
-        # Adicionar resultados dos grupos ao resultado final
-        results['groups_created'] = groups_results['created']
-        results['groups_updated'] = groups_results['updated']
-        results['groups_skipped'] = groups_results['skipped']
-        results['groups_deleted'] = groups_results['deleted']
-        results['groups_errors'] = groups_results['errors']
+        # Verificar se groups_results é um dicionário válido
+        if isinstance(groups_results, dict):
+            logger.info(f"Grupos sincronizados: {groups_results['created']} criados, {groups_results['updated']} atualizados, {groups_results['skipped']} ignorados, {groups_results['deleted']} deletados")
+            
+            # Adicionar resultados dos grupos ao resultado final
+            results['groups_created'] = groups_results['created']
+            results['groups_updated'] = groups_results['updated']
+            results['groups_skipped'] = groups_results['skipped']
+            results['groups_deleted'] = groups_results['deleted']
+            results['groups_errors'] = groups_results['errors']
+        else:
+            logger.error(f"Erro na sincronização de grupos: resultado inválido ({type(groups_results)})")
+            results['groups_created'] = 0
+            results['groups_updated'] = 0
+            results['groups_skipped'] = 0
+            results['groups_deleted'] = 0
+            results['groups_errors'] = [f"Erro na sincronização de grupos: {groups_results}"]
         
         # Campos padrão do sistema que não devem ser sincronizados
         system_codes = ['PHONE', 'EMAIL', 'POSITION', 'WEB', 'IM', 'ADDRESS']
@@ -1617,14 +1627,14 @@ class KommoSyncService:
                                     logger.debug(f"Novos enums: {sorted(new_values)}")
                             
                             # Verificar se currency mudou (para campos monetários)
-                            if field_type == 'price':
+                            if field_type in ['price', 'monetary']:
                                 existing_currency = existing_field.get('currency')
                                 new_currency = master_field.get('currency', 'USD')
                                 if existing_currency != new_currency:
                                     update_data['currency'] = new_currency
                                     needs_update = True
                                     logger.info(f"💰 Currency do campo '{field_name}' será atualizada: {existing_currency} -> {new_currency}")
-                                elif 'currency' not in update_data:
+                                else:
                                     # Sempre incluir currency em atualizações de campos monetários
                                     update_data['currency'] = new_currency
                                     logger.debug(f"💰 Currency mantida para campo monetário '{field_name}': {new_currency}")
