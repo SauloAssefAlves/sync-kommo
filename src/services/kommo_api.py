@@ -1303,26 +1303,61 @@ class KommoSyncService:
                                 for i, rs in enumerate(mapped_required_statuses, 1):
                                     logger.info(f"   {i}. pipeline_id: {rs['pipeline_id']}, status_id: {rs['status_id']}")
                                 
-                                # VALIDAÇÃO SIMPLIFICADA: apenas verificar se não são None
+                                # VALIDAÇÃO REAL: verificar se os IDs existem na slave
+                                logger.info(f"🔍 Validando IDs na conta slave REAL...")
                                 valid_required_statuses = []
-                                for mapped_status in mapped_required_statuses:
-                                    slave_status_id = mapped_status['status_id']
-                                    slave_pipeline_id = mapped_status['pipeline_id']
+                                
+                                try:
+                                    # Obter pipelines e stages reais da slave
+                                    real_slave_pipelines = slave_api.get_pipelines()
+                                    logger.debug(f"Pipelines disponíveis na slave: {[p['id'] for p in real_slave_pipelines[:5]]}...")
                                     
-                                    if slave_status_id and slave_pipeline_id:
-                                        valid_required_statuses.append(mapped_status)
-                                        logger.debug(f"   ✅ Válido: pipeline {slave_pipeline_id}, status {slave_status_id}")
-                                    else:
-                                        logger.warning(f"   ❌ ID inválido: pipeline {slave_pipeline_id}, status {slave_status_id}")
+                                    for mapped_status in mapped_required_statuses:
+                                        slave_status_id = mapped_status['status_id']
+                                        slave_pipeline_id = mapped_status['pipeline_id']
+                                        
+                                        logger.info(f"   🔍 Validando pipeline_id: {slave_pipeline_id}, status_id: {slave_status_id}")
+                                        
+                                        # Verificar se pipeline existe
+                                        pipeline_exists = any(p['id'] == slave_pipeline_id for p in real_slave_pipelines)
+                                        
+                                        if pipeline_exists:
+                                            logger.debug(f"      ✅ Pipeline {slave_pipeline_id} existe na slave")
+                                            
+                                            # Verificar se status existe no pipeline
+                                            try:
+                                                real_slave_stages = slave_api.get_pipeline_stages(slave_pipeline_id)
+                                                status_exists = any(s['id'] == slave_status_id for s in real_slave_stages)
+                                                
+                                                if status_exists:
+                                                    logger.info(f"      ✅ VÁLIDO: pipeline {slave_pipeline_id}, status {slave_status_id}")
+                                                    valid_required_statuses.append(mapped_status)
+                                                else:
+                                                    logger.error(f"      ❌ Status {slave_status_id} NÃO existe no pipeline {slave_pipeline_id}")
+                                                    logger.debug(f"         Status disponíveis: {[s['id'] for s in real_slave_stages[:5]]}...")
+                                            except Exception as stage_error:
+                                                logger.error(f"      ❌ Erro ao obter stages do pipeline {slave_pipeline_id}: {stage_error}")
+                                        else:
+                                            logger.error(f"      ❌ Pipeline {slave_pipeline_id} NÃO existe na slave")
+                                            logger.debug(f"         Pipelines disponíveis: {[p['id'] for p in real_slave_pipelines[:5]]}...")
+                                
+                                except Exception as validation_error:
+                                    logger.error(f"❌ Erro na validação real: {validation_error}")
+                                    # Em caso de erro na validação, não usar required_statuses
+                                    valid_required_statuses = []
                                 
                                 if valid_required_statuses:
                                     field_data['required_statuses'] = valid_required_statuses
-                                    logger.info(f"✅ Campo '{field_name}' será criado com {len(valid_required_statuses)} required_statuses")
+                                    logger.info(f"✅ Campo '{field_name}' será criado com {len(valid_required_statuses)} required_statuses VALIDADOS")
                                 else:
-                                    logger.warning(f"❌ Nenhum required_status válido após validação para campo '{field_name}' - campo será criado sem restrições específicas")
+                                    logger.warning(f"❌ NENHUM required_status válido encontrado - campo será criado SEM restrições específicas")
+                                    logger.info(f"ℹ️ Campo '{field_name}' estará disponível em todos os estágios")
                             else:
                                 logger.warning(f"❌ Nenhum required_status válido para campo '{field_name}' - campo não será obrigatório em estágios específicos")
-                                # Não incluir required_statuses vazios - deixar o campo sem restrições específicas
+                                # NÃO incluir required_statuses vazios ou inválidos
+                                if 'required_statuses' in field_data:
+                                    del field_data['required_statuses']
+                                    logger.info(f"🗑️ Removido required_statuses inválidos do campo '{field_name}'")
                         
                         # Relacionar campo ao grupo correto na conta escrava
                         logger.debug(f"🔍 Verificando grupo para campo '{field_name}': master_group_id={master_field.get('group_id')}")

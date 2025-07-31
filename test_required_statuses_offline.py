@@ -34,14 +34,14 @@ def simulate_required_statuses_mapping():
         ]
     }
     
-    # Simular dados da slave (após sincronização)
+    # Simular dados da slave (após sincronização) - CORRIGIDO com ID real
     slave_pipelines = [
-        {'id': 11670175, 'name': 'cor teste 2'},  # Mapeado de 11670079
-        {'id': 11670176, 'name': 'Pipeline Principal'},  # Mapeado de 11670080
+        {'id': 11680487, 'name': 'cor teste 2'},  # ID REAL da slave
+        {'id': 11670176, 'name': 'Pipeline Principal'},  # Exemplo
     ]
     
     slave_stages = {
-        11670175: [  # Pipeline 'cor teste 2' na slave
+        11680487: [  # Pipeline 'cor teste 2' na slave com ID correto
             {'id': 89685559, 'name': 'blue', 'color': '#d6eaff'},  # Mapeado de 89684599
             {'id': 89685560, 'name': 'red', 'color': '#ffdbdb'},   # Mapeado de 89684600
             {'id': 89685561, 'name': 'green', 'color': '#87f2c0'}, # Mapeado de 89684601
@@ -206,12 +206,12 @@ def test_api_validation_error():
     logger.info("   status_id deveria ser o ID do status")
     logger.info("   Mas os valores estão invertidos!")
     
-    # Dados corretos
+    # Dados corretos com ID real da pipeline
     correct_data = {
         'name': 'Observações Detalhadas',
         'type': 'textarea',
         'required_statuses': [
-            {'pipeline_id': 11670175, 'status_id': 89685559},  # CORRETO
+            {'pipeline_id': 11680487, 'status_id': 89685559},  # CORRETO com ID real
         ]
     }
     
