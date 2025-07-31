@@ -1256,36 +1256,73 @@ class KommoSyncService:
                         # Mapear required_statuses (estágios específicos onde é obrigatório)
                         if master_field.get('required_statuses'):
                             mapped_required_statuses = []
-                            logger.debug(f"🎯 Mapeando required_statuses para campo '{field_name}': {master_field['required_statuses']}")
+                            logger.info(f"🎯 Mapeando required_statuses para campo '{field_name}':")
+                            logger.info(f"   Master required_statuses: {master_field['required_statuses']}")
+                            logger.info(f"   Mapeamentos disponíveis - Pipelines: {len(mappings.get('pipelines', {}))}, Stages: {len(mappings.get('stages', {}))}")
                             
                             for req_status in master_field['required_statuses']:
                                 master_status_id = req_status.get('status_id')
                                 master_pipeline_id = req_status.get('pipeline_id')
                                 
+                                logger.info(f"   🔍 Processando: pipeline={master_pipeline_id}, status={master_status_id}")
+                                
+                                # Verificar se é um estágio especial que deve ser ignorado
+                                stage_info = {'id': master_status_id}  # Criar objeto mínimo para teste
+                                if self._should_ignore_stage(stage_info):
+                                    logger.info(f"   🚫 Ignorando required_status com estágio especial {master_status_id} - gerenciado pelo Kommo")
+                                    continue
+                                
                                 # Mapear pipeline_id da master para escrava
                                 if master_pipeline_id and master_pipeline_id in mappings.get('pipelines', {}):
                                     slave_pipeline_id = mappings['pipelines'][master_pipeline_id]
+                                    logger.debug(f"   ✅ Pipeline mapeado: {master_pipeline_id} -> {slave_pipeline_id}")
                                     
                                     # Mapear status_id da master para escrava
                                     if master_status_id and master_status_id in mappings.get('stages', {}):
                                         slave_status_id = mappings['stages'][master_status_id]
+                                        logger.debug(f"   ✅ Status mapeado: {master_status_id} -> {slave_status_id}")
                                         
                                         mapped_status = {
                                             'status_id': slave_status_id,
                                             'pipeline_id': slave_pipeline_id
                                         }
                                         mapped_required_statuses.append(mapped_status)
-                                        logger.debug(f"✅ Mapeado required_status: pipeline {master_pipeline_id}->{slave_pipeline_id}, status {master_status_id}->{slave_status_id}")
+                                        logger.info(f"   ✅ Required_status mapeado com sucesso: pipeline {master_pipeline_id}->{slave_pipeline_id}, status {master_status_id}->{slave_status_id}")
                                     else:
-                                        logger.warning(f"❌ Status {master_status_id} não encontrado nos mapeamentos para campo '{field_name}'")
+                                        logger.warning(f"   ❌ Status {master_status_id} não encontrado nos mapeamentos - pulando required_status")
+                                        logger.debug(f"   📋 Status disponíveis: {list(mappings.get('stages', {}).keys())[:10]}...")
                                 else:
-                                    logger.warning(f"❌ Pipeline {master_pipeline_id} não encontrado nos mapeamentos para campo '{field_name}'")
+                                    logger.warning(f"   ❌ Pipeline {master_pipeline_id} não encontrado nos mapeamentos - pulando required_status")
+                                    logger.debug(f"   📋 Pipelines disponíveis: {list(mappings.get('pipelines', {}).keys())[:10]}...")
                             
                             if mapped_required_statuses:
-                                field_data['required_statuses'] = mapped_required_statuses
-                                logger.info(f"🎯 Campo '{field_name}' terá {len(mapped_required_statuses)} required_statuses mapeados")
+                                logger.info(f"🎯 Campo '{field_name}' tem {len(mapped_required_statuses)} required_statuses mapeados")
+                                
+                                # Log detalhado dos dados que serão enviados
+                                logger.info(f"📤 Dados mapeados para envio:")
+                                for i, rs in enumerate(mapped_required_statuses, 1):
+                                    logger.info(f"   {i}. pipeline_id: {rs['pipeline_id']}, status_id: {rs['status_id']}")
+                                
+                                # VALIDAÇÃO SIMPLIFICADA: apenas verificar se não são None
+                                valid_required_statuses = []
+                                for mapped_status in mapped_required_statuses:
+                                    slave_status_id = mapped_status['status_id']
+                                    slave_pipeline_id = mapped_status['pipeline_id']
+                                    
+                                    if slave_status_id and slave_pipeline_id:
+                                        valid_required_statuses.append(mapped_status)
+                                        logger.debug(f"   ✅ Válido: pipeline {slave_pipeline_id}, status {slave_status_id}")
+                                    else:
+                                        logger.warning(f"   ❌ ID inválido: pipeline {slave_pipeline_id}, status {slave_status_id}")
+                                
+                                if valid_required_statuses:
+                                    field_data['required_statuses'] = valid_required_statuses
+                                    logger.info(f"✅ Campo '{field_name}' será criado com {len(valid_required_statuses)} required_statuses")
+                                else:
+                                    logger.warning(f"❌ Nenhum required_status válido após validação para campo '{field_name}' - campo será criado sem restrições específicas")
                             else:
                                 logger.warning(f"❌ Nenhum required_status válido para campo '{field_name}' - campo não será obrigatório em estágios específicos")
+                                # Não incluir required_statuses vazios - deixar o campo sem restrições específicas
                         
                         # Relacionar campo ao grupo correto na conta escrava
                         logger.debug(f"🔍 Verificando grupo para campo '{field_name}': master_group_id={master_field.get('group_id')}")
@@ -1621,9 +1658,59 @@ class KommoSyncService:
                         
                     except Exception as e:
                         error_msg = f"Erro ao sincronizar campo '{master_field['name']}' para {entity_type}: {e}"
-                        logger.error(error_msg)
-                        logger.error(f"Dados do campo que causou erro: {master_field}")
-                        results['errors'].append(error_msg)
+                        
+                        # Tratamento específico para erros de required_statuses
+                        if ("required_statuses" in str(e) or 
+                            "NotSupportedChoice" in str(e) or 
+                            "status_id" in str(e) or 
+                            "pipeline_id" in str(e)):
+                            
+                            logger.error(f"❌ ERRO DE REQUIRED_STATUSES: {error_msg}")
+                            logger.error(f"🔍 Problema com validação de pipeline_id/status_id nos required_statuses")
+                            
+                            # Log dos dados que causaram erro
+                            if field_data.get('required_statuses'):
+                                logger.error(f"📋 Required_statuses que causaram erro:")
+                                for rs in field_data['required_statuses']:
+                                    logger.error(f"   - pipeline_id: {rs.get('pipeline_id')}, status_id: {rs.get('status_id')}")
+                            
+                            # Tentar criar o campo sem required_statuses como fallback
+                            logger.info(f"🔄 Tentando criar campo '{master_field['name']}' SEM required_statuses como fallback...")
+                            try:
+                                # Remover required_statuses dos dados
+                                fallback_field_data = field_data.copy()
+                                if 'required_statuses' in fallback_field_data:
+                                    del fallback_field_data['required_statuses']
+                                
+                                logger.info(f"📤 Criando campo SEM required_statuses:")
+                                logger.info(f"   Nome: {fallback_field_data.get('name')}")
+                                logger.info(f"   Tipo: {fallback_field_data.get('type')}")
+                                logger.info(f"   Grupo: {fallback_field_data.get('group_id', 'Sem grupo')}")
+                                
+                                fallback_response = slave_api.create_custom_field(entity_type, fallback_field_data)
+                                slave_field_id = fallback_response['_embedded']['custom_fields'][0]['id']
+                                
+                                logger.warning(f"⚠️ Campo '{master_field['name']}' criado SEM required_statuses específicos (ID: {slave_field_id})")
+                                logger.info(f"ℹ️ Campo estará disponível em todos os estágios do funil")
+                                
+                                results['created'] += 1
+                                
+                                # Armazenar mapeamento mesmo assim
+                                if 'custom_fields' not in mappings:
+                                    mappings['custom_fields'] = {}
+                                if entity_type not in mappings['custom_fields']:
+                                    mappings['custom_fields'][entity_type] = {}
+                                mappings['custom_fields'][entity_type][master_field['id']] = slave_field_id
+                                
+                            except Exception as fallback_error:
+                                logger.error(f"❌ Fallback também falhou: {fallback_error}")
+                                results['errors'] += 1
+                        else:
+                            logger.error(error_msg)
+                            results['errors'] += 1
+                        
+                        if progress_callback:
+                            progress_callback(f"❌ Erro no campo '{master_field['name']}': {e}")
                 
                 # FASE 2: Deletar campos que existem na escrava mas NÃO existem na master
                 fields_to_delete = []

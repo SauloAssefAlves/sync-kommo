@@ -153,8 +153,127 @@ def debug_blue_status():
                     logger.error(f"      🟡 A cor da slave É AMARELA!")
                     logger.error(f"      Isso pode indicar uso de fallback por índice")
         
-        # 4. TESTAR FUNÇÃO DE VALIDAÇÃO DE COR
-        logger.info(f"\n🧪 STEP 4: Testando função get_valid_kommo_color...")
+        # 4. VERIFICAR CAMPOS PERSONALIZADOS - ESPECIALMENTE TEXTO LONGO
+        logger.info(f"\n📝 STEP 4: Verificando campos personalizados (texto longo)...")
+        
+        try:
+            master_fields = master_api.get_custom_fields()
+            logger.info(f"   Total de campos na master: {len(master_fields)}")
+            
+            # Procurar campos texto longo com required_statuses
+            text_fields_with_statuses = []
+            for field in master_fields:
+                field_type = field.get('type')
+                field_name = field.get('name', 'Sem nome')
+                required_statuses = field.get('required_statuses', [])
+                
+                if field_type == 'textarea' and required_statuses:
+                    text_fields_with_statuses.append(field)
+                    logger.info(f"   📄 Campo texto longo encontrado: '{field_name}'")
+                    logger.info(f"      Tipo: {field_type}")
+                    logger.info(f"      Required statuses: {len(required_statuses)}")
+                    
+                    for rs in required_statuses:
+                        logger.info(f"         - Pipeline {rs.get('pipeline_id')}, Status {rs.get('status_id')}")
+            
+            if not text_fields_with_statuses:
+                logger.info("   ℹ️ Nenhum campo texto longo com required_statuses encontrado")
+                return
+            
+            # 5. VERIFICAR MAPEAMENTO DOS REQUIRED_STATUSES
+            logger.info(f"\n🔄 STEP 5: Verificando mapeamento de required_statuses...")
+            
+            for field in text_fields_with_statuses:
+                field_name = field.get('name')
+                required_statuses = field.get('required_statuses', [])
+                
+                logger.info(f"\n   🔍 Analisando campo '{field_name}':")
+                
+                for rs in required_statuses:
+                    master_pipeline_id = rs.get('pipeline_id')
+                    master_status_id = rs.get('status_id')
+                    
+                    logger.info(f"      📋 Required Status:")
+                    logger.info(f"         Master Pipeline ID: {master_pipeline_id}")
+                    logger.info(f"         Master Status ID: {master_status_id}")
+                    
+                    # Verificar se existe na master
+                    master_pipeline_exists = any(p['id'] == master_pipeline_id for p in master_pipelines)
+                    if master_pipeline_exists:
+                        master_stages = master_api.get_pipeline_stages(master_pipeline_id)
+                        master_status_exists = any(s['id'] == master_status_id for s in master_stages)
+                        logger.info(f"         ✅ Existe na master: Pipeline={master_pipeline_exists}, Status={master_status_exists}")
+                    else:
+                        logger.warning(f"         ❌ Pipeline {master_pipeline_id} não existe na master!")
+                    
+                    # Verificar mapeamento para slaves
+                    for slave_account in slave_accounts:
+                        logger.info(f"\n         🔸 Verificando mapeamento para slave: {slave_account.subdomain}")
+                        
+                        # Simular busca de mapeamento (sem banco)
+                        logger.info(f"            🔍 Buscaria mapeamento:")
+                        logger.info(f"               Master Pipeline {master_pipeline_id} → Slave Pipeline ?")
+                        logger.info(f"               Master Status {master_status_id} → Slave Status ?")
+                        
+                        # Verificar se pipeline existe na slave
+                        slave_api = KommoAPIService(slave_account.subdomain, slave_account.refresh_token)
+                        if slave_api.test_connection():
+                            slave_pipelines = slave_api.get_pipelines()
+                            
+                            # Procurar pipeline com nome similar
+                            matching_pipeline = None
+                            for sp in slave_pipelines:
+                                # Encontrar pipeline na master com esse ID
+                                master_pipeline_name = None
+                                for mp in master_pipelines:
+                                    if mp['id'] == master_pipeline_id:
+                                        master_pipeline_name = mp['name']
+                                        break
+                                
+                                if master_pipeline_name and sp['name'] == master_pipeline_name:
+                                    matching_pipeline = sp
+                                    break
+                            
+                            if matching_pipeline:
+                                logger.info(f"            ✅ Pipeline correspondente encontrado na slave: {matching_pipeline['id']}")
+                                
+                                # Verificar status
+                                slave_stages = slave_api.get_pipeline_stages(matching_pipeline['id'])
+                                
+                                # Encontrar status na master com esse ID
+                                master_status_name = None
+                                master_stages = master_api.get_pipeline_stages(master_pipeline_id)
+                                for ms in master_stages:
+                                    if ms['id'] == master_status_id:
+                                        master_status_name = ms['name']
+                                        break
+                                
+                                if master_status_name:
+                                    matching_status = None
+                                    for ss in slave_stages:
+                                        if ss['name'] == master_status_name:
+                                            matching_status = ss
+                                            break
+                                    
+                                    if matching_status:
+                                        logger.info(f"            ✅ Status correspondente encontrado na slave: {matching_status['id']}")
+                                        logger.info(f"            📝 Mapeamento seria:")
+                                        logger.info(f"               Pipeline: {master_pipeline_id} → {matching_pipeline['id']}")
+                                        logger.info(f"               Status: {master_status_id} → {matching_status['id']}")
+                                    else:
+                                        logger.warning(f"            ❌ Status '{master_status_name}' não encontrado na slave")
+                                else:
+                                    logger.warning(f"            ❌ Status {master_status_id} não encontrado na master")
+                            else:
+                                logger.warning(f"            ❌ Pipeline correspondente não encontrado na slave")
+                        else:
+                            logger.warning(f"            ❌ Falha de conexão com slave")
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao verificar campos personalizados: {e}")
+        
+        # 6. TESTAR FUNÇÃO DE VALIDAÇÃO DE COR
+        logger.info(f"\n🧪 STEP 6: Testando função get_valid_kommo_color...")
         
         def get_valid_kommo_color(master_color, fallback_index):
             """Função igual à do código principal"""
