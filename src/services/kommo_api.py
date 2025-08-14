@@ -112,9 +112,9 @@ class KommoAPIService:
         """Atualiza um estágio existente"""
         return self._make_request('PATCH', f'/leads/pipelines/{pipeline_id}/statuses/{stage_id}', data=stage_data)
     
-    def delete_pipeline_stage(self, stage_id: int) -> Dict:
+    def delete_pipeline_stage(self, pipeline_id: int, stage_id: int) -> Dict:
         """Deleta um estágio de pipeline"""
-        return self._make_request('DELETE', f'/leads/pipelines/statuses/{stage_id}')
+        return self._make_request('DELETE', f'/leads/pipelines/{pipeline_id}/statuses/{stage_id}')
     
     def get_custom_fields(self, entity_type: str) -> List[Dict]:
         """Obtém todos os campos personalizados para uma entidade (leads, contacts, companies)"""
@@ -756,8 +756,8 @@ class KommoSyncService:
                     
                     logger.info(f"🗑️ Excluindo estágio '{stage_name}' (ID: {stage_id}) da slave")
                     
-                    # Chamar API para deletar o estágio
-                    delete_response = slave_api.delete_pipeline_stage(stage_id)
+                    # Chamar API para deletar o estágio (com pipeline_id correto)
+                    delete_response = slave_api.delete_pipeline_stage(slave_pipeline_id, stage_id)
                     
                     if delete_response.get('success') or delete_response.get('status_code') in [200, 204]:
                         logger.info(f"✅ Estágio '{stage_name}' excluído com sucesso")
