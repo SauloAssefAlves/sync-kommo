@@ -1463,6 +1463,37 @@ class KommoSyncService:
                         
                         logger.info(f"🔄 Atualizando role existente '{role_name}' (ID: {slave_role_id})")
                         
+                        # VALIDAÇÃO PRÉVIA: Verificar se todos os status_ids existem realmente na slave
+                        if 'status_rights' in role_data['rights']:
+                            logger.debug(f"🔍 Validando {len(role_data['rights']['status_rights'])} status_rights antes da atualização...")
+                            
+                            # Buscar todos os status disponíveis na slave
+                            try:
+                                slave_pipelines = slave_api.get_pipelines()
+                                all_slave_status_ids = set()
+                                for pipeline in slave_pipelines:
+                                    for stage in pipeline.get('_embedded', {}).get('statuses', []):
+                                        all_slave_status_ids.add(int(stage['id']))
+                                
+                                logger.debug(f"🔍 Total de status disponíveis na slave: {len(all_slave_status_ids)}")
+                                
+                                # Filtrar apenas status_rights válidos
+                                validated_status_rights = []
+                                for sr in role_data['rights']['status_rights']:
+                                    status_id = int(sr['status_id'])
+                                    if status_id in all_slave_status_ids:
+                                        validated_status_rights.append(sr)
+                                    else:
+                                        logger.warning(f"     🚫 Status {status_id} não existe na slave - removendo da requisição")
+                                
+                                # Atualizar com apenas os status_rights válidos
+                                role_data['rights']['status_rights'] = validated_status_rights
+                                logger.info(f"✅ Validação concluída: {len(validated_status_rights)} de {len(role_data['rights']['status_rights']) if 'status_rights' in role_data['rights'] else 0} status_rights são válidos")
+                                
+                            except Exception as e:
+                                logger.error(f"❌ Erro na validação prévia de status_rights: {e}")
+                                logger.info("⚠️ Prosseguindo sem validação prévia...")
+                        
                         # Log das diferenças antes da atualização
                         if logger.isEnabledFor(logging.DEBUG):
                             existing_rights = existing_role.get('rights', {})
@@ -1477,6 +1508,38 @@ class KommoSyncService:
                     else:
                         # Criar nova role
                         logger.info(f"🆕 Criando nova role '{role_name}'")
+                        
+                        # VALIDAÇÃO PRÉVIA: Verificar se todos os status_ids existem realmente na slave
+                        if 'status_rights' in role_data['rights']:
+                            logger.debug(f"🔍 Validando {len(role_data['rights']['status_rights'])} status_rights antes da criação...")
+                            
+                            # Buscar todos os status disponíveis na slave
+                            try:
+                                slave_pipelines = slave_api.get_pipelines()
+                                all_slave_status_ids = set()
+                                for pipeline in slave_pipelines:
+                                    for stage in pipeline.get('_embedded', {}).get('statuses', []):
+                                        all_slave_status_ids.add(int(stage['id']))
+                                
+                                logger.debug(f"🔍 Total de status disponíveis na slave: {len(all_slave_status_ids)}")
+                                
+                                # Filtrar apenas status_rights válidos
+                                validated_status_rights = []
+                                for sr in role_data['rights']['status_rights']:
+                                    status_id = int(sr['status_id'])
+                                    if status_id in all_slave_status_ids:
+                                        validated_status_rights.append(sr)
+                                    else:
+                                        logger.warning(f"     🚫 Status {status_id} não existe na slave - removendo da requisição")
+                                
+                                # Atualizar com apenas os status_rights válidos
+                                role_data['rights']['status_rights'] = validated_status_rights
+                                logger.info(f"✅ Validação concluída: {len(validated_status_rights)} status_rights são válidos")
+                                
+                            except Exception as e:
+                                logger.error(f"❌ Erro na validação prévia de status_rights: {e}")
+                                logger.info("⚠️ Prosseguindo sem validação prévia...")
+                        
                         logger.debug(f"Dados que serão enviados: {role_data}")
                         
                         response = slave_api.create_role(role_data)
