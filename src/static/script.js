@@ -1,3 +1,9 @@
+// Configuração da API
+const API_CONFIG = {
+  baseUrl: "http://89.116.186.230:5000",
+  endpoint: "/api",
+};
+
 // Variáveis globais para controle do sistema
 let syncInProgress = false;
 let currentSyncType = null;
@@ -11,6 +17,11 @@ const defaultConfig = {
   batchDelay: 2.0,
   maxConcurrent: 3,
 };
+
+// Helper function para construir URLs da API
+function buildApiUrl(path) {
+  return `${API_CONFIG.baseUrl}${API_CONFIG.endpoint}${path}`;
+}
 
 // Initialize quando a página carregar
 document.addEventListener("DOMContentLoaded", function () {
@@ -85,7 +96,7 @@ async function triggerBatchSync(syncType) {
       `Configuração: Lote=${config.batch_size}, Delay=${config.delay_between_batches}s`
     );
 
-    const response = await fetch("/api/sync/trigger", {
+    const response = await fetch(buildApiUrl("/sync/trigger"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -129,7 +140,7 @@ async function triggerMultiAccountSync() {
       `Configuração: Paralelo=${parallel}, Continuar com erro=${continueOnError}`
     );
 
-    const response = await fetch("/api/sync/multi-account", {
+    const response = await fetch(buildApiUrl("/sync/multi-account"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -161,7 +172,7 @@ async function stopSync() {
   try {
     addLog("Parando sincronização...");
 
-    const response = await fetch("/api/sync/stop", {
+    const response = await fetch(buildApiUrl("/sync/stop"), {
       method: "POST",
     });
 
@@ -239,7 +250,7 @@ function stopStatusMonitoring() {
 // Carregar status da sincronização
 async function loadSyncStatus() {
   try {
-    const response = await fetch("/api/sync/status");
+    const response = await fetch(buildApiUrl("/sync/status"));
     const result = await response.json();
 
     if (result.success && result.status) {
@@ -317,7 +328,7 @@ function updateStatistics(results) {
 // Atualizar lista de contas
 async function refreshAccountsList() {
   try {
-    const response = await fetch("/api/sync/accounts/slaves");
+    const response = await fetch(buildApiUrl("/sync/accounts/slaves"));
     const result = await response.json();
 
     if (result.success && result.accounts) {
@@ -374,9 +385,12 @@ async function testSingleAccount(accountId) {
   try {
     addLog(`Testando conta ${accountId}...`);
 
-    const response = await fetch(`/api/sync/accounts/${accountId}/test`, {
-      method: "POST",
-    });
+    const response = await fetch(
+      buildApiUrl(`/sync/accounts/${accountId}/test`),
+      {
+        method: "POST",
+      }
+    );
 
     const result = await response.json();
 
@@ -405,7 +419,7 @@ async function syncSingleAccount(accountId) {
     setSyncInProgress(true, "single-account");
     addLog(`Sincronizando conta ${accountId}...`);
 
-    const response = await fetch(`/api/sync/account/${accountId}`, {
+    const response = await fetch(buildApiUrl(`/sync/account/${accountId}`), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -527,7 +541,7 @@ let masterAccounts = [];
 // Carregar grupos disponíveis
 async function refreshGroups() {
   try {
-    const response = await fetch("/api/groups");
+    const response = await fetch(buildApiUrl("/groups"));
     if (response.ok) {
       const data = await response.json();
       groups = data.groups || [];
@@ -574,7 +588,7 @@ function updateGroupSelect() {
 // Carregar detalhes do grupo
 async function loadGroupDetails(groupId) {
   try {
-    const response = await fetch(`/api/groups/${groupId}`);
+    const response = await fetch(buildApiUrl(`/groups/${groupId}`));
     if (response.ok) {
       const data = await response.json();
       const group = data.group;
@@ -635,7 +649,7 @@ function hideCreateGroupModal() {
 // Carregar contas mestres disponíveis
 async function loadMasterAccounts() {
   try {
-    const response = await fetch("/api/sync/accounts");
+    const response = await fetch(buildApiUrl("/sync/accounts"));
     if (response.ok) {
       const data = await response.json();
       const accounts = data.accounts || [];
@@ -681,7 +695,7 @@ async function createGroup() {
   }
 
   try {
-    const response = await fetch("/api/groups", {
+    const response = await fetch(buildApiUrl("/groups"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -738,16 +752,19 @@ async function syncGroup() {
       max_concurrent: parseInt(document.getElementById("maxConcurrent").value),
     };
 
-    const response = await fetch(`/api/groups/${currentGroupId}/sync`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        sync_type: "full",
-        batch_config: batchConfig,
-      }),
-    });
+    const response = await fetch(
+      buildApiUrl(`/groups/${currentGroupId}/sync`),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sync_type: "full",
+          batch_config: batchConfig,
+        }),
+      }
+    );
 
     if (response.ok) {
       const data = await response.json();
@@ -839,7 +856,7 @@ async function createMasterAccount() {
     createBtn.disabled = true;
 
     // Criar conta
-    const response = await fetch("/api/sync/accounts", {
+    const response = await fetch(buildApiUrl("/sync/accounts"), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -922,7 +939,7 @@ let isCompactView = true;
 // Carregar visão geral das contas
 async function refreshAccountsOverview() {
   try {
-    const response = await fetch("/api/groups/overview");
+    const response = await fetch(buildApiUrl("/groups/overview"));
     if (response.ok) {
       const data = await response.json();
       accountsOverviewData = data.groups || [];

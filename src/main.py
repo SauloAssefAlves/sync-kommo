@@ -15,7 +15,9 @@ app = Flask(__name__, static_folder=os.path.join(os.path.dirname(__file__), 'sta
 app.config['SECRET_KEY'] = 'asdf#FGSgvasgf$5$WGT'
 
 # Database configuration
-app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'app.db')}"
+# Use remote database server or fallback to local
+REMOTE_DB_URL = os.getenv('DATABASE_URL', f"sqlite:///{os.path.join(os.path.dirname(__file__), 'database', 'app.db')}")
+app.config['SQLALCHEMY_DATABASE_URI'] = REMOTE_DB_URL
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 # Initialize the shared db instance with the app

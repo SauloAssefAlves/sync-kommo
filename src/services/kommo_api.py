@@ -589,14 +589,18 @@ class KommoSyncService:
                             
                             # Mapear estágios normais para IDs gerados pela API
                             if created_stage_index < len(created_stages):
-                                slave_stage_id = created_stages[created_stage_index]['id']
-                                master_stage_id = master_stage['id']
+                                slave_stage_id = int(created_stages[created_stage_index]['id'])
+                                master_stage_id = int(master_stage['id'])
                                 mappings['stages'][master_stage_id] = slave_stage_id
                                 logger.info(f"✅ Mapeando estágio '{master_stage['name']}' -> ID slave {slave_stage_id}")
+                                logger.debug(f"🎭 Mapeamento de stage salvo na criação: {master_stage_id} -> {slave_stage_id}")
                                 created_stage_index += 1
                     
-                    # Armazenar mapeamento do pipeline
-                    mappings['pipelines'][master_pipeline['id']] = slave_pipeline_id
+                    # Armazenar mapeamento do pipeline - garantir que seja inteiro
+                    master_pipeline_id = int(master_pipeline['id'])
+                    slave_pipeline_id = int(slave_pipeline_id)
+                    mappings['pipelines'][master_pipeline_id] = slave_pipeline_id
+                    logger.debug(f"📊 Mapeamento de pipeline salvo: {master_pipeline_id} -> {slave_pipeline_id}")
                     
                     # Se pipeline já existia, sincronizar estágios separadamente
                     if pipeline_name in existing_pipelines:
@@ -767,12 +771,13 @@ class KommoSyncService:
                     slave_stage_id = existing_stage['id']
                     logger.info(f"✅ Estágio '{stage_name}' já existe (slave_id: {slave_stage_id})")
                     
-                    # Armazenar mapeamento sem criar novo estágio
+                    # Armazenar mapeamento sem criar novo estágio - garantir que sejam inteiros
                     if 'stages' not in mappings:
                         mappings['stages'] = {}
-                    # Usar ID do master stage
-                    master_stage_id = master_stage['id']
+                    master_stage_id = int(master_stage['id'])
+                    slave_stage_id = int(slave_stage_id)
                     mappings['stages'][master_stage_id] = slave_stage_id
+                    logger.debug(f"🎭 Mapeamento de stage existente salvo: {master_stage_id} -> {slave_stage_id}")
                 else:
                     # Criar novo estágio na conta escrava
                     logger.info(f"🆕 Criando estágio '{stage_name}' no pipeline {slave_pipeline_id}")
@@ -784,9 +789,11 @@ class KommoSyncService:
                     # Armazenar mapeamento para o estágio recém-criado
                     if 'stages' not in mappings:
                         mappings['stages'] = {}
-                    # Usar ID do master stage
-                    master_stage_id = master_stage['id']
+                    # Usar ID do master stage - garantir que seja inteiro
+                    master_stage_id = int(master_stage['id'])
+                    slave_stage_id = int(slave_stage_id)
                     mappings['stages'][master_stage_id] = slave_stage_id
+                    logger.debug(f"🎭 Mapeamento de stage salvo: {master_stage_id} -> {slave_stage_id}")
                 
             except Exception as e:
                 logger.error(f"Erro ao sincronizar estágio '{master_stage['name']}': {e}")
@@ -991,8 +998,11 @@ class KommoSyncService:
             ).all()
             
             for mapping in pipeline_mappings:
-                mappings['pipelines'][mapping.master_pipeline_id] = mapping.slave_pipeline_id
-                logger.debug(f"📊 Pipeline mapping: {mapping.master_pipeline_id} -> {mapping.slave_pipeline_id}")
+                # Garantir que IDs sejam inteiros
+                master_id = int(mapping.master_pipeline_id)
+                slave_id = int(mapping.slave_pipeline_id)
+                mappings['pipelines'][master_id] = slave_id
+                logger.debug(f"📊 Pipeline mapping: {master_id} -> {slave_id}")
             
             # Carregar mapeamentos de estágios
             stage_mappings = StageMapping.query.filter_by(
@@ -1001,8 +1011,11 @@ class KommoSyncService:
             ).all()
             
             for mapping in stage_mappings:
-                mappings['stages'][mapping.master_stage_id] = mapping.slave_stage_id
-                logger.debug(f"🎭 Stage mapping: {mapping.master_stage_id} -> {mapping.slave_stage_id}")
+                # Garantir que IDs sejam inteiros
+                master_id = int(mapping.master_stage_id)
+                slave_id = int(mapping.slave_stage_id)
+                mappings['stages'][master_id] = slave_id
+                logger.debug(f"🎭 Stage mapping: {master_id} -> {slave_id}")
             
             pipeline_count = len(mappings['pipelines'])
             stage_count = len(mappings['stages'])
@@ -1236,6 +1249,14 @@ class KommoSyncService:
             logger.info(f"   - Pipelines: {len(mappings.get('pipelines', {}))} mapeamentos")
             logger.info(f"   - Stages: {len(mappings.get('stages', {}))} mapeamentos")
             
+            # Log de exemplo dos mapeamentos se houver
+            if mappings.get('pipelines'):
+                pipeline_sample = list(mappings.get('pipelines', {}).items())[:3]
+                logger.info(f"   - Exemplo de pipelines: {pipeline_sample}")
+            if mappings.get('stages'):
+                stages_sample = list(mappings.get('stages', {}).items())[:3]
+                logger.info(f"   - Exemplo de stages: {stages_sample}")
+            
             if logger.isEnabledFor(logging.DEBUG):
                 pipelines_sample = list(mappings.get('pipelines', {}).items())[:3]
                 stages_sample = list(mappings.get('stages', {}).items())[:3]
@@ -1284,6 +1305,11 @@ class KommoSyncService:
                         
                         logger.debug(f"Mapeamentos disponíveis: {len(pipelines_mapping)} pipelines, {len(stages_mapping)} stages")
                         
+                        # Log detalhado dos mapeamentos para debug
+                        if logger.isEnabledFor(logging.DEBUG):
+                            logger.debug(f"📊 Pipelines mapping completo: {pipelines_mapping}")
+                            logger.debug(f"🎭 Stages mapping completo: {stages_mapping}")
+                        
                         for i, status_right in enumerate(master_rights['status_rights'], 1):
                             master_pipeline_id = status_right.get('pipeline_id')
                             master_status_id = status_right.get('status_id')
@@ -1293,16 +1319,26 @@ class KommoSyncService:
                             logger.debug(f"  {i}. Processando status_right: entity={entity_type}, pipeline={master_pipeline_id}, status={master_status_id}")
                             logger.debug(f"     Rights: {rights}")
                             
+                            # Converter IDs para inteiros para garantir compatibilidade
+                            try:
+                                master_pipeline_id = int(master_pipeline_id) if master_pipeline_id else None
+                                master_status_id = int(master_status_id) if master_status_id else None
+                            except (ValueError, TypeError):
+                                logger.warning(f"     ❌ IDs inválidos: pipeline={master_pipeline_id}, status={master_status_id} - pulando")
+                                continue
+                            
                             # Mapear pipeline_id da master para slave
                             slave_pipeline_id = pipelines_mapping.get(master_pipeline_id)
                             if not slave_pipeline_id:
                                 logger.warning(f"     ❌ Pipeline {master_pipeline_id} não encontrado nos mapeamentos - pulando")
+                                logger.warning(f"     🔍 Mapeamentos de pipeline disponíveis: {list(pipelines_mapping.keys())}")
                                 continue
                             
                             # Mapear status_id da master para slave
                             slave_status_id = stages_mapping.get(master_status_id)
                             if not slave_status_id:
                                 logger.warning(f"     ❌ Status {master_status_id} não encontrado nos mapeamentos - pulando")
+                                logger.warning(f"     🔍 Mapeamentos de stage disponíveis: {list(stages_mapping.keys())}")
                                 continue
                             
                             # Validar que os direitos (rights) são válidos
@@ -1330,8 +1366,8 @@ class KommoSyncService:
                             
                             mapped_status_right = {
                                 'entity_type': entity_type,
-                                'pipeline_id': slave_pipeline_id,
-                                'status_id': slave_status_id,
+                                'pipeline_id': int(slave_pipeline_id),
+                                'status_id': int(slave_status_id),
                                 'rights': valid_rights
                             }
                             mapped_status_rights.append(mapped_status_right)
