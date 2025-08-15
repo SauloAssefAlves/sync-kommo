@@ -162,10 +162,15 @@ def test_mappings_loading_in_roles_sync():
     # === SUMMARY ===
     print("\n" + "=" * 60)
     print("📊 RESUMO DO TESTE:")
-    print("❌ Problema Original: Mapeamentos vazios = Status IDs não encontrados")  
+    print("🎯 ID 63288851 É DA MASTER (correto!) - problema é nos mapeamentos")
+    print("❌ Problema Original: Mapeamentos vazios = Status IDs da MASTER não conseguem ser convertidos")  
     print("✅ Solução Implementada: Carregar mapeamentos do banco após sync de pipelines")
-    print("🎯 Status ID 63288851 (master) agora mapeia para 89317579 (slave)")
+    print("📝 Fluxo correto: master_id(63288851) -> mapeamento -> slave_id(89317579)")
     print("🔧 Correção aplicada em sync.py linhas 1117 e 1296")
+    print("\n💡 EXPLICAÇÃO:")
+    print("   • 63288851 = ID do status na conta MASTER")
+    print("   • 89317579 = ID do status correspondente na conta SLAVE")
+    print("   • Sistema precisa do mapeamento master->slave para funcionar")
     print("=" * 60)
 
 if __name__ == '__main__':
