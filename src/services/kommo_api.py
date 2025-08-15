@@ -1471,8 +1471,8 @@ class KommoSyncService:
                     else:
                         results['errors'].append(f"Role '{role_name}': {str(e)}")
                     
-                    # Continuar com próxima role em vez de parar tudo
-                    continue
+                    # Retornar da função em caso de erro
+                    return
             
             # Processar roles em lotes
             self._process_in_batches(
