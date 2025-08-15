@@ -713,6 +713,49 @@ def clear_all_accounts():
         db.session.rollback()
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@sync_bp.route('/accounts/<int:account_id>', methods=['DELETE'])
+def delete_account(account_id):
+    """Remove uma conta específica do banco de dados"""
+    try:
+        # Buscar a conta
+        account = KommoAccount.query.get(account_id)
+        if not account:
+            return jsonify({'success': False, 'error': 'Conta não encontrada'}), 404
+        
+        # Verificar se é uma conta master
+        if account.is_master or account.account_role == 'master':
+            return jsonify({
+                'success': False, 
+                'error': 'Não é possível excluir a conta master. Use /accounts/clear para remover todas as contas.'
+            }), 400
+        
+        # Guardar informações para log
+        subdomain = account.subdomain
+        account_role = account.account_role
+        sync_group_id = account.sync_group_id
+        
+        # Remover a conta
+        db.session.delete(account)
+        db.session.commit()
+        
+        logger.info(f"Conta {subdomain} (ID: {account_id}) foi removida do banco")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Conta {subdomain} removida com sucesso',
+            'account': {
+                'id': account_id,
+                'subdomain': subdomain,
+                'account_role': account_role,
+                'sync_group_id': sync_group_id
+            }
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro ao remover conta {account_id}: {e}")
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @sync_bp.route('/config/test', methods=['GET'])
 def test_config():
     """Testa as configurações do sistema"""
