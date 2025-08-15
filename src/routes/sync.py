@@ -904,7 +904,18 @@ def stop_sync():
 
 @sync_bp.route('/roles', methods=['POST'])
 def sync_roles_only():
-    """Sincroniza somente as roles (funções/permissões) entre as contas"""
+    """
+    Sincroniza somente as roles (funções/permissões) entre as contas
+    
+    IMPORTANTE: Este endpoint automaticamente sincroniza pipelines primeiro
+    para garantir que os mapeamentos de status_rights estejam atualizados.
+    
+    Fluxo de execução:
+    1. Sincroniza pipelines/stages (para criar mapeamentos atualizados)
+    2. Sincroniza roles (usando mapeamentos corretos)
+    
+    Isso resolve problemas de "Status not found" causados por mapeamentos desatualizados.
+    """
     try:
         data = request.get_json() or {}
         master_account_id = data.get('master_account_id')
@@ -1088,6 +1099,23 @@ def sync_roles_only():
                     })
                     continue
                 
+                # SINCRONIZAR PIPELINES PRIMEIRO para garantir mapeamentos atualizados
+                logger.info(f"🔧 Sincronizando pipelines primeiro para conta {slave_account.subdomain} (garantindo mapeamentos atualizados)...")
+                try:
+                    # Usar o mesmo sync_service para manter consistência
+                    pipelines_results = sync_service.sync_pipelines_to_slave(
+                        slave_api=slave_api,
+                        master_config=master_config,
+                        mappings={'pipelines': {}, 'stages': {}},
+                        progress_callback=progress_callback,
+                        sync_group_id=slave_account.sync_group_id,
+                        slave_account_id=slave_account.id
+                    )
+                    logger.info(f"✅ Pipelines sincronizadas para {slave_account.subdomain}: {pipelines_results.get('created', 0)} criadas, {pipelines_results.get('updated', 0)} atualizadas")
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao sincronizar pipelines para {slave_account.subdomain}: {e}")
+                    logger.info(f"📋 Prosseguindo com sincronização de roles mesmo assim...")
+                
                 # Sincronizar roles
                 logger.info(f"🔐 Sincronizando roles para conta {slave_account.subdomain}...")
                 mappings = {'roles': {}}
@@ -1242,7 +1270,17 @@ def sync_single_account(account_id):
             elif sync_type == 'required_statuses':
                 result = sync_service.sync_required_statuses([account.subdomain])
             elif sync_type == 'roles':
-                # Para sincronização de roles individual, usar o método moderno com parâmetros corretos
+                # Para sincronização de roles individual, sincronizar pipelines primeiro
+                logger.info(f"🔧 Sincronizando pipelines primeiro para garantir mapeamentos atualizados...")
+                try:
+                    # Sincronizar pipelines primeiro
+                    pipelines_result = sync_service.sync_pipelines([account.subdomain])
+                    logger.info(f"✅ Pipelines sincronizadas: {pipelines_result}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao sincronizar pipelines: {e}")
+                    logger.info(f"📋 Prosseguindo com sincronização de roles mesmo assim...")
+                
+                # Agora sincronizar roles com mapeamentos atualizados
                 master_config = sync_service.extract_master_configuration()
                 mappings = {'pipelines': {}, 'stages': {}, 'custom_fields': {}, 'roles': {}}
                 result = sync_service.sync_roles_to_slave(
