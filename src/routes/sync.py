@@ -1118,7 +1118,18 @@ def sync_roles_only():
                 
                 # Sincronizar roles
                 logger.info(f"🔐 Sincronizando roles para conta {slave_account.subdomain}...")
-                mappings = {'roles': {}}
+                
+                # CARREGAR MAPEAMENTOS ATUALIZADOS DO BANCO após sincronização de pipelines
+                logger.info(f"📖 Carregando mapeamentos atualizados do banco de dados...")
+                try:
+                    mappings = sync_service._load_mappings_from_database(
+                        slave_account.sync_group_id, 
+                        slave_account.id
+                    )
+                    logger.info(f"✅ Mapeamentos carregados: {len(mappings.get('pipelines', {}))} pipelines, {len(mappings.get('stages', {}))} stages")
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao carregar mapeamentos: {e} - usando mapeamentos vazios")
+                    mappings = {'pipelines': {}, 'stages': {}, 'roles': {}}
                 
                 roles_results = sync_service.sync_roles_to_slave(
                     slave_api=slave_api,
@@ -1282,7 +1293,19 @@ def sync_single_account(account_id):
                 
                 # Agora sincronizar roles com mapeamentos atualizados
                 master_config = sync_service.extract_master_configuration()
-                mappings = {'pipelines': {}, 'stages': {}, 'custom_fields': {}, 'roles': {}}
+                
+                # CARREGAR MAPEAMENTOS ATUALIZADOS DO BANCO após sincronização de pipelines
+                logger.info(f"📖 Carregando mapeamentos atualizados do banco de dados...")
+                try:
+                    mappings = sync_service._load_mappings_from_database(
+                        account.sync_group_id, 
+                        account.id
+                    )
+                    logger.info(f"✅ Mapeamentos carregados: {len(mappings.get('pipelines', {}))} pipelines, {len(mappings.get('stages', {}))} stages")
+                except Exception as e:
+                    logger.warning(f"⚠️ Erro ao carregar mapeamentos: {e} - usando mapeamentos vazios")
+                    mappings = {'pipelines': {}, 'stages': {}, 'custom_fields': {}, 'roles': {}}
+                
                 result = sync_service.sync_roles_to_slave(
                     slave_api, 
                     master_config, 
