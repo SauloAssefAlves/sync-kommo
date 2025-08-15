@@ -1366,6 +1366,11 @@ class KommoSyncService:
                             logger.debug(f"  {i}. Processando status_right: entity={entity_type}, pipeline={master_pipeline_id}, status={master_status_id}")
                             logger.debug(f"     Rights: {rights}")
                             
+                            # 🚨 DETECTAR IDs SUSPEITOS: IDs da slave na role master
+                            if master_status_id and str(master_status_id).startswith(('896', '897', '905')):
+                                logger.warning(f"     🚨 ID SUSPEITO: Status {master_status_id} parece ser da SLAVE, não da MASTER!")
+                                logger.warning(f"     💡 Role master pode ter dados incorretos - verificar origem desta role")
+                            
                             # Converter IDs para inteiros para garantir compatibilidade
                             try:
                                 master_pipeline_id = int(master_pipeline_id) if master_pipeline_id else None
@@ -1384,7 +1389,13 @@ class KommoSyncService:
                             # Mapear status_id da master para slave
                             slave_status_id = stages_mapping.get(master_status_id)
                             if not slave_status_id:
-                                logger.warning(f"     ❌ Status {master_status_id} não encontrado nos mapeamentos - pulando")
+                                # Diagnóstico melhorado para IDs não encontrados
+                                if str(master_status_id).startswith(('896', '897', '905')):
+                                    logger.warning(f"     ❌ Status {master_status_id} não encontrado nos mapeamentos - ATENÇÃO: Este ID parece ser da SLAVE!")
+                                    logger.warning(f"     🔍 Role master pode conter dados incorretos - este status já pode ser da conta slave")
+                                else:
+                                    logger.warning(f"     ❌ Status {master_status_id} não encontrado nos mapeamentos - pulando")
+                                    
                                 logger.warning(f"     🔍 Mapeamentos de stage disponíveis: {list(stages_mapping.keys())}")
                                 continue
                             
