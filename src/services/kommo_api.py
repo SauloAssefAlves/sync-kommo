@@ -196,6 +196,49 @@ class KommoAPIService:
         """Deleta um pipeline"""
         return self._make_request('DELETE', f'/leads/pipelines/{pipeline_id}')
     
+    # Funções para trabalhar com usuários e roles
+    def get_users(self) -> List[Dict]:
+        """Obtém todos os usuários da conta"""
+        response = self._make_request('GET', '/users')
+        return response.get('_embedded', {}).get('users', [])
+    
+    def get_user(self, user_id: int) -> Dict:
+        """Obtém informações de um usuário específico"""
+        return self._make_request('GET', f'/users/{user_id}')
+    
+    def get_roles(self) -> List[Dict]:
+        """Obtém todas as roles (funções/permissões) da conta"""
+        response = self._make_request('GET', '/roles')
+        return response.get('_embedded', {}).get('roles', [])
+    
+    def get_role(self, role_id: int) -> Dict:
+        """Obtém informações de uma role específica"""
+        return self._make_request('GET', f'/roles/{role_id}')
+    
+    def create_role(self, role_data: Dict) -> Dict:
+        """Cria uma nova role"""
+        return self._make_request('POST', '/roles', data=[role_data])
+    
+    def update_role(self, role_id: int, role_data: Dict) -> Dict:
+        """Atualiza uma role existente"""
+        return self._make_request('PATCH', f'/roles/{role_id}', data=role_data)
+    
+    def delete_role(self, role_id: int) -> Dict:
+        """Deleta uma role"""
+        return self._make_request('DELETE', f'/roles/{role_id}')
+    
+    def update_user(self, user_id: int, user_data: Dict) -> Dict:
+        """Atualiza informações de um usuário (incluindo role)"""
+        return self._make_request('PATCH', f'/users/{user_id}', data=user_data)
+    
+    def create_user(self, user_data: Dict) -> Dict:
+        """Cria um novo usuário"""
+        return self._make_request('POST', '/users', data=[user_data])
+    
+    def delete_user(self, user_id: int) -> Dict:
+        """Deleta um usuário"""
+        return self._make_request('DELETE', f'/users/{user_id}')
+    
     def test_connection(self) -> bool:
         """Testa se a conexão com a API está funcionando"""
         try:
@@ -299,7 +342,9 @@ class KommoSyncService:
         config = {
             'pipelines': [],
             'custom_fields': {},
-            'custom_field_groups': {}
+            'custom_field_groups': {},
+            'roles': [],
+            'users': []
         }
         
         # Extrair pipelines e seus estágios
@@ -395,6 +440,44 @@ class KommoSyncService:
                             field_data['enums'].append(enum_data)
                 
                 config['custom_fields'][entity_type].append(field_data)
+        
+        # Extrair roles (funções/permissões)
+        logger.info("🔐 Extraindo roles da conta master...")
+        try:
+            roles = self.master_api.get_roles()
+            for role in roles:
+                role_data = {
+                    'id': role['id'],
+                    'name': role['name'],
+                    'rights': role.get('rights', {}),  # Permissões da role
+                }
+                config['roles'].append(role_data)
+                logger.debug(f"Role extraída: {role['name']} (ID: {role['id']})")
+            logger.info(f"✅ {len(config['roles'])} roles extraídas")
+        except Exception as e:
+            logger.error(f"Erro ao extrair roles: {e}")
+            config['roles'] = []
+        
+        # Extrair usuários
+        logger.info("👥 Extraindo usuários da conta master...")
+        try:
+            users = self.master_api.get_users()
+            for user in users:
+                user_data = {
+                    'id': user['id'],
+                    'name': user['name'],
+                    'email': user.get('email', ''),
+                    'role_id': user.get('role_id'),
+                    'is_active': user.get('is_active', True),
+                    'is_admin': user.get('is_admin', False),
+                    'language': user.get('language', 'pt'),
+                }
+                config['users'].append(user_data)
+                logger.debug(f"Usuário extraído: {user['name']} (email: {user.get('email', 'N/A')}, role: {user.get('role_id', 'N/A')})")
+            logger.info(f"✅ {len(config['users'])} usuários extraídos")
+        except Exception as e:
+            logger.error(f"Erro ao extrair usuários: {e}")
+            config['users'] = []
         
         return config
     
@@ -921,7 +1004,7 @@ class KommoSyncService:
         try:
             logger.info(f"📖 Carregando mapeamentos do banco para grupo {sync_group_id}, conta {slave_account_id}")
             
-            mappings = {'pipelines': {}, 'stages': {}, 'custom_field_groups': {}}
+            mappings = {'pipelines': {}, 'stages': {}, 'custom_field_groups': {}, 'roles': {}}
             
             # Carregar mapeamentos de pipelines
             pipeline_mappings = PipelineMapping.query.filter_by(
@@ -951,7 +1034,7 @@ class KommoSyncService:
             
         except Exception as e:
             logger.error(f"❌ Erro ao carregar mapeamentos do banco: {e}")
-            return {'pipelines': {}, 'stages': {}, 'custom_field_groups': {}}
+            return {'pipelines': {}, 'stages': {}, 'custom_field_groups': {}, 'roles': {}}
     
     def _sync_automatic_stage_names(self, slave_api: KommoAPIService, master_pipeline: Dict, slave_pipeline_id: int):
         """
@@ -1147,6 +1230,222 @@ class KommoSyncService:
                 results['errors'].append(str(e))
         
         logger.info(f"📁 Sincronização de grupos concluída: {results}")
+        return results
+    
+    def sync_roles_to_slave(self, slave_api: KommoAPIService, master_config: Dict, 
+                           mappings: Dict, progress_callback: Optional[Callable] = None) -> Dict:
+        """Sincroniza roles (funções/permissões) da conta mestre para uma conta escrava"""
+        logger.info("🔐 Iniciando sincronização de roles...")
+        results = {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []}
+        
+        # Reset da flag de parada
+        self._stop_sync = False
+        
+        try:
+            # Obter roles existentes na conta escrava
+            existing_roles = {r['name']: r for r in slave_api.get_roles()}
+            master_role_names = {role['name'] for role in master_config['roles']}
+            
+            logger.info(f"📋 Roles existentes na slave: {list(existing_roles.keys())}")
+            logger.info(f"📋 Roles da master: {list(master_role_names)}")
+            
+            # Inicializar mapeamento de roles
+            if 'roles' not in mappings:
+                mappings['roles'] = {}
+            
+            # FASE 1: Criar/Atualizar roles da master
+            def process_role(master_role, results):
+                role_name = master_role['name']
+                logger.info(f"🔄 Processando role: {role_name}")
+                
+                try:
+                    if role_name in existing_roles:
+                        # Role já existe - verificar se precisa atualizar
+                        existing_role = existing_roles[role_name]
+                        slave_role_id = existing_role['id']
+                        
+                        # Comparar permissões (rights)
+                        needs_update = False
+                        update_data = {}
+                        
+                        if existing_role.get('rights', {}) != master_role.get('rights', {}):
+                            update_data['rights'] = master_role.get('rights', {})
+                            needs_update = True
+                            logger.info(f"Permissões da role '{role_name}' serão atualizadas")
+                        
+                        if needs_update:
+                            logger.info(f"🔄 Atualizando role '{role_name}' (ID: {slave_role_id})")
+                            slave_api.update_role(slave_role_id, update_data)
+                            results['updated'] += 1
+                        else:
+                            logger.info(f"✅ Role '{role_name}' já está sincronizada")
+                            results['skipped'] += 1
+                    else:
+                        # Criar nova role
+                        role_data = {
+                            'name': master_role['name'],
+                            'rights': master_role.get('rights', {})
+                        }
+                        
+                        logger.info(f"🆕 Criando role '{role_name}'")
+                        response = slave_api.create_role(role_data)
+                        slave_role_id = response['_embedded']['roles'][0]['id']
+                        results['created'] += 1
+                        logger.info(f"✅ Role '{role_name}' criada com ID: {slave_role_id}")
+                    
+                    # Armazenar mapeamento
+                    mappings['roles'][master_role['id']] = slave_role_id
+                    
+                except Exception as e:
+                    logger.error(f"Erro ao processar role '{role_name}': {e}")
+                    raise
+            
+            # Processar roles em lotes
+            self._process_in_batches(
+                items=master_config['roles'],
+                process_func=process_role,
+                operation_name="roles",
+                results=results,
+                progress_callback=progress_callback
+            )
+            
+            if self._stop_sync:
+                return results
+            
+            # FASE 2: Deletar roles que existem na slave mas NÃO existem na master
+            roles_to_delete = []
+            for slave_role_name, slave_role in existing_roles.items():
+                if slave_role_name not in master_role_names:
+                    # Não deletar role de admin ou roles do sistema
+                    if not slave_role.get('is_system', False) and slave_role_name.lower() not in ['admin', 'administrator', 'administrador']:
+                        roles_to_delete.append(slave_role)
+            
+            def delete_role(role_to_delete, results):
+                role_name = role_to_delete['name']
+                role_id = role_to_delete['id']
+                logger.info(f"🗑️ Deletando role '{role_name}' (ID: {role_id})")
+                
+                try:
+                    delete_response = slave_api.delete_role(role_id)
+                    if delete_response.get('success') or delete_response.get('status_code') in [200, 204]:
+                        results['deleted'] += 1
+                        logger.info(f"✅ Role '{role_name}' deletada com sucesso")
+                    else:
+                        results['deleted'] += 1  # Considerar como sucesso
+                        
+                except Exception as e:
+                    error_str = str(e).lower()
+                    if any(phrase in error_str for phrase in ['not found', '404', 'does not exist']):
+                        results['deleted'] += 1
+                        logger.info(f"ℹ️ Role '{role_name}' já foi removida")
+                    else:
+                        logger.error(f"Erro ao deletar role '{role_name}': {e}")
+                        raise
+            
+            if roles_to_delete:
+                logger.info(f"🗑️ Iniciando exclusão de {len(roles_to_delete)} roles...")
+                self._process_in_batches(
+                    items=roles_to_delete,
+                    process_func=delete_role,
+                    operation_name="exclusão de roles",
+                    results=results,
+                    progress_callback=progress_callback
+                )
+            
+        except Exception as e:
+            logger.error(f"Erro geral na sincronização de roles: {e}")
+            results['errors'].append(str(e))
+        
+        logger.info(f"🔐 Sincronização de roles concluída: {results}")
+        return results
+    
+    def sync_users_to_slave(self, slave_api: KommoAPIService, master_config: Dict, 
+                           mappings: Dict, progress_callback: Optional[Callable] = None) -> Dict:
+        """Sincroniza usuários da conta mestre para uma conta escrava"""
+        logger.info("👥 Iniciando sincronização de usuários...")
+        results = {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []}
+        
+        # Reset da flag de parada
+        self._stop_sync = False
+        
+        try:
+            # Obter usuários existentes na conta escrava
+            existing_users = {u['email']: u for u in slave_api.get_users() if u.get('email')}
+            master_user_emails = {user['email'] for user in master_config['users'] if user.get('email')}
+            
+            logger.info(f"📋 Usuários existentes na slave: {list(existing_users.keys())}")
+            logger.info(f"📋 Usuários da master: {list(master_user_emails)}")
+            
+            # FASE 1: Atualizar usuários existentes (não criar novos usuários)
+            def process_user(master_user, results):
+                user_email = master_user.get('email')
+                user_name = master_user['name']
+                
+                if not user_email:
+                    logger.warning(f"Usuário '{user_name}' não tem email - pulando")
+                    results['skipped'] += 1
+                    return
+                
+                logger.info(f"🔄 Processando usuário: {user_name} ({user_email})")
+                
+                try:
+                    if user_email in existing_users:
+                        # Usuário já existe - verificar se precisa atualizar role
+                        existing_user = existing_users[user_email]
+                        slave_user_id = existing_user['id']
+                        
+                        needs_update = False
+                        update_data = {}
+                        
+                        # Mapear role_id da master para slave
+                        master_role_id = master_user.get('role_id')
+                        if master_role_id and master_role_id in mappings.get('roles', {}):
+                            slave_role_id = mappings['roles'][master_role_id]
+                            
+                            if existing_user.get('role_id') != slave_role_id:
+                                update_data['role_id'] = slave_role_id
+                                needs_update = True
+                                logger.info(f"Role do usuário '{user_name}' será atualizada: {existing_user.get('role_id')} -> {slave_role_id}")
+                        
+                        # Verificar outros campos
+                        if existing_user.get('name') != master_user['name']:
+                            update_data['name'] = master_user['name']
+                            needs_update = True
+                        
+                        if existing_user.get('language') != master_user.get('language', 'pt'):
+                            update_data['language'] = master_user.get('language', 'pt')
+                            needs_update = True
+                        
+                        if needs_update:
+                            logger.info(f"🔄 Atualizando usuário '{user_name}' (ID: {slave_user_id})")
+                            slave_api.update_user(slave_user_id, update_data)
+                            results['updated'] += 1
+                        else:
+                            logger.info(f"✅ Usuário '{user_name}' já está sincronizado")
+                            results['skipped'] += 1
+                    else:
+                        # Usuário não existe - apenas log, não criar
+                        logger.info(f"ℹ️ Usuário '{user_name}' não existe na slave - não será criado automaticamente")
+                        results['skipped'] += 1
+                    
+                except Exception as e:
+                    logger.error(f"Erro ao processar usuário '{user_name}': {e}")
+                    raise
+            
+            # Processar usuários em lotes
+            self._process_in_batches(
+                items=master_config['users'],
+                process_func=process_user,
+                operation_name="usuários",
+                results=results,
+                progress_callback=progress_callback
+            )
+            
+        except Exception as e:
+            logger.error(f"Erro geral na sincronização de usuários: {e}")
+            results['errors'].append(str(e))
+        
+        logger.info(f"👥 Sincronização de usuários concluída: {results}")
         return results
     
     def sync_custom_fields_to_slave(self, slave_api: KommoAPIService, master_config: Dict, 
@@ -1888,11 +2187,12 @@ class KommoSyncService:
         if sync_group_id and slave_account_id:
             mappings = self._load_mappings_from_database(sync_group_id, slave_account_id)
         else:
-            mappings = {'pipelines': {}, 'stages': {}, 'custom_field_groups': {}}
+            mappings = {'pipelines': {}, 'stages': {}, 'custom_field_groups': {}, 'roles': {}}
         total_results = {
             'pipelines': {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []},
             'custom_field_groups': {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []},
-            'custom_fields': {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []}
+            'custom_fields': {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []},
+            'roles': {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []}
         }
         
         try:
@@ -1919,6 +2219,14 @@ class KommoSyncService:
                 total_results['custom_fields'] = fields_results
                 logger.info(f"Campos: {fields_results['created']} criados, {fields_results['updated']} atualizados, "
                            f"{fields_results['skipped']} ignorados, {fields_results['deleted']} deletados")
+            
+            # FASE 4: Sincronizar roles (funções/permissões)
+            if not self._stop_sync:
+                logger.info("🔐 FASE 4: Sincronizando roles em lotes...")
+                roles_results = self.sync_roles_to_slave(slave_api, master_config, mappings, progress_callback)
+                total_results['roles'] = roles_results
+                logger.info(f"Roles: {roles_results['created']} criadas, {roles_results['updated']} atualizadas, "
+                           f"{roles_results['skipped']} ignoradas, {roles_results['deleted']} deletadas")
             
             # Calcular totais
             total_created = sum(results['created'] for results in total_results.values())

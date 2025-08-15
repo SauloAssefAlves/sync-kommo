@@ -263,7 +263,7 @@ def trigger_group_sync(group_id, sync_type='full', batch_config=None):
                     if not slave_api.test_connection():
                         raise Exception(f"Falha na conexão com a conta {slave_account.subdomain}")
                     
-                    mappings = {'pipelines': {}, 'stages': {}, 'custom_fields': {}}
+                    mappings = {'pipelines': {}, 'stages': {}, 'custom_fields': {}, 'roles': {}}
                     account_results = {'subdomain': slave_account.subdomain}
                     
                     # Sincronizar baseado no tipo solicitado
@@ -479,7 +479,7 @@ def trigger_sync():
                     if not slave_api.test_connection():
                         raise Exception(f"Falha na conexão com a conta {slave_account.subdomain}")
                     
-                    mappings = {'pipelines': {}, 'stages': {}, 'custom_fields': {}}
+                    mappings = {'pipelines': {}, 'stages': {}, 'custom_fields': {}, 'roles': {}}
                     account_results = {'subdomain': slave_account.subdomain}
                     
                     # Sincronizar baseado no tipo solicitado
@@ -887,6 +887,288 @@ def stop_sync():
         
     except Exception as e:
         logger.error(f"Erro ao parar sincronização: {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@sync_bp.route('/roles', methods=['POST'])
+def sync_roles_only():
+    """Sincroniza somente as roles (funções/permissões) entre as contas"""
+    try:
+        data = request.get_json() or {}
+        master_account_id = data.get('master_account_id')
+        slave_account_ids = data.get('slave_account_ids', [])
+        
+        # Se não especificar contas, buscar todas as contas ativas
+        if not master_account_id:
+            # Buscar conta master padrão (primeira conta ativa com role 'master')
+            master_account = KommoAccount.query.filter_by(
+                is_active=True, 
+                account_role='master'
+            ).first()
+            if not master_account:
+                return jsonify({
+                    'success': False, 
+                    'error': 'Nenhuma conta master encontrada'
+                }), 400
+            master_account_id = master_account.id
+        else:
+            master_account = KommoAccount.query.get(master_account_id)
+            if not master_account:
+                return jsonify({
+                    'success': False, 
+                    'error': f'Conta master {master_account_id} não encontrada'
+                }), 404
+        
+        # Se não especificar contas slave, buscar todas as contas slave ativas
+        if not slave_account_ids:
+            slave_accounts = KommoAccount.query.filter_by(
+                is_active=True, 
+                account_role='slave'
+            ).all()
+            slave_account_ids = [acc.id for acc in slave_accounts]
+        
+        if not slave_account_ids:
+            return jsonify({
+                'success': False, 
+                'error': 'Nenhuma conta slave encontrada para sincronização'
+            }), 400
+        
+        logger.info(f"🔐 Iniciando sincronização de roles - Master: {master_account_id}, Slaves: {slave_account_ids}")
+        
+        # Verificar se já há sincronização em andamento
+        if global_sync_status['is_running']:
+            return jsonify({
+                'success': False, 
+                'error': 'Já existe uma sincronização em andamento'
+            }), 409
+        
+        # Atualizar status global
+        update_global_status(
+            is_running=True,
+            sync_type='roles_only',
+            current_status='initializing',
+            progress=0,
+            current_operation='Iniciando sincronização de roles...',
+            start_time=datetime.now(),
+            total_accounts=len(slave_account_ids),
+            accounts_processed=0,
+            results={}
+        )
+        
+        # Configurar API da conta master
+        master_api = KommoAPIService(master_account.subdomain, master_account.refresh_token)
+        
+        # Testar conexão da conta master
+        if not master_api.test_connection():
+            update_global_status(is_running=False, current_status='error')
+            return jsonify({
+                'success': False, 
+                'error': 'Falha na conexão com a conta master'
+            }), 500
+        
+        # Configurações de lote
+        batch_config = data.get('batch_config', {})
+        batch_size = batch_config.get('batch_size', 5)
+        batch_delay = batch_config.get('batch_delay', 1.0)
+        
+        # Inicializar serviço de sincronização
+        sync_service = KommoSyncService(master_api, batch_size=batch_size, delay_between_batches=batch_delay)
+        
+        # Extrair configuração de roles da master
+        update_global_status(
+            current_status='extracting_config',
+            current_operation='Extraindo configuração de roles da conta master...',
+            progress=5
+        )
+        
+        master_config = {'roles': []}
+        try:
+            roles = master_api.get_roles()
+            for role in roles:
+                role_data = {
+                    'id': role['id'],
+                    'name': role['name'],
+                    'rights': role.get('rights', {}),
+                }
+                master_config['roles'].append(role_data)
+                logger.debug(f"Role extraída: {role['name']} (ID: {role['id']})")
+            
+            logger.info(f"✅ {len(master_config['roles'])} roles extraídas da conta master")
+            
+        except Exception as e:
+            logger.error(f"Erro ao extrair roles da master: {e}")
+            update_global_status(is_running=False, current_status='error')
+            return jsonify({
+                'success': False, 
+                'error': f'Erro ao extrair roles da master: {str(e)}'
+            }), 500
+        
+        # Verificar se há roles para sincronizar
+        if not master_config['roles']:
+            update_global_status(is_running=False, current_status='completed')
+            return jsonify({
+                'success': True, 
+                'message': 'Nenhuma role encontrada na conta master para sincronizar',
+                'results': {'total_accounts': 0, 'success_accounts': 0, 'failed_accounts': 0}
+            })
+        
+        # Resultados consolidados
+        consolidated_results = {
+            'total_accounts': len(slave_account_ids),
+            'success_accounts': 0,
+            'failed_accounts': 0,
+            'total_roles_created': 0,
+            'total_roles_updated': 0,
+            'total_roles_deleted': 0,
+            'total_roles_skipped': 0,
+            'account_details': []
+        }
+        
+        # Função de callback para progresso
+        def progress_callback(progress_data):
+            current_progress = 10 + (global_sync_status['accounts_processed'] * 80 // len(slave_account_ids))
+            if progress_data:
+                batch_progress = (progress_data.get('percentage', 0) * 80) // (100 * len(slave_account_ids))
+                current_progress += batch_progress
+            
+            update_global_status(
+                progress=min(current_progress, 95),
+                current_operation=f"Sincronizando roles - {progress_data.get('operation', 'processando')}",
+                current_batch=f"Conta {global_sync_status['accounts_processed'] + 1}/{len(slave_account_ids)}"
+            )
+        
+        # Sincronizar para cada conta slave
+        for i, slave_account_id in enumerate(slave_account_ids):
+            try:
+                if sync_service._stop_sync:
+                    logger.info("🛑 Sincronização interrompida pelo usuário")
+                    break
+                
+                update_global_status(
+                    accounts_processed=i,
+                    current_operation=f'Sincronizando roles para conta {slave_account_id}...'
+                )
+                
+                # Obter dados da conta slave
+                slave_account = KommoAccount.query.get(slave_account_id)
+                if not slave_account:
+                    logger.error(f"Conta slave {slave_account_id} não encontrada")
+                    consolidated_results['failed_accounts'] += 1
+                    consolidated_results['account_details'].append({
+                        'account_id': slave_account_id,
+                        'status': 'failed',
+                        'error': 'Conta não encontrada'
+                    })
+                    continue
+                
+                # Configurar API da conta slave
+                slave_api = KommoAPIService(slave_account.subdomain, slave_account.refresh_token)
+                
+                # Testar conexão da conta slave
+                if not slave_api.test_connection():
+                    logger.error(f"Falha na conexão com a conta slave {slave_account_id}")
+                    consolidated_results['failed_accounts'] += 1
+                    consolidated_results['account_details'].append({
+                        'account_id': slave_account_id,
+                        'subdomain': slave_account.subdomain,
+                        'status': 'failed',
+                        'error': 'Falha na conexão'
+                    })
+                    continue
+                
+                # Sincronizar roles
+                logger.info(f"🔐 Sincronizando roles para conta {slave_account.subdomain}...")
+                mappings = {'roles': {}}
+                
+                roles_results = sync_service.sync_roles_to_slave(
+                    slave_api=slave_api,
+                    master_config=master_config,
+                    mappings=mappings,
+                    progress_callback=progress_callback
+                )
+                
+                # Registrar resultado
+                if roles_results.get('errors'):
+                    consolidated_results['failed_accounts'] += 1
+                    consolidated_results['account_details'].append({
+                        'account_id': slave_account_id,
+                        'subdomain': slave_account.subdomain,
+                        'status': 'failed',
+                        'error': '; '.join(roles_results['errors']),
+                        'partial_results': roles_results
+                    })
+                else:
+                    consolidated_results['success_accounts'] += 1
+                    consolidated_results['account_details'].append({
+                        'account_id': slave_account_id,
+                        'subdomain': slave_account.subdomain,
+                        'status': 'success',
+                        'results': roles_results
+                    })
+                
+                # Acumular estatísticas
+                consolidated_results['total_roles_created'] += roles_results.get('created', 0)
+                consolidated_results['total_roles_updated'] += roles_results.get('updated', 0)
+                consolidated_results['total_roles_deleted'] += roles_results.get('deleted', 0)
+                consolidated_results['total_roles_skipped'] += roles_results.get('skipped', 0)
+                
+                # Registrar log de sincronização
+                sync_log = SyncLog(
+                    source_account_id=master_account_id,
+                    target_account_id=slave_account_id,
+                    sync_type='roles_only',
+                    status='success' if not roles_results.get('errors') else 'failed',
+                    details={
+                        'roles_created': roles_results.get('created', 0),
+                        'roles_updated': roles_results.get('updated', 0),
+                        'roles_deleted': roles_results.get('deleted', 0),
+                        'roles_skipped': roles_results.get('skipped', 0),
+                        'errors': roles_results.get('errors', [])
+                    }
+                )
+                db.session.add(sync_log)
+                
+            except Exception as e:
+                logger.error(f"Erro ao sincronizar roles para conta {slave_account_id}: {e}")
+                consolidated_results['failed_accounts'] += 1
+                consolidated_results['account_details'].append({
+                    'account_id': slave_account_id,
+                    'status': 'failed',
+                    'error': str(e)
+                })
+        
+        # Salvar logs no banco
+        try:
+            db.session.commit()
+        except Exception as e:
+            logger.error(f"Erro ao salvar logs: {e}")
+            db.session.rollback()
+        
+        # Finalizar status
+        update_global_status(
+            is_running=False,
+            current_status='completed',
+            progress=100,
+            current_operation='Sincronização de roles concluída',
+            accounts_processed=len(slave_account_ids),
+            results=consolidated_results
+        )
+        
+        logger.info(f"🔐 Sincronização de roles concluída: {consolidated_results}")
+        
+        return jsonify({
+            'success': True,
+            'message': f'Sincronização de roles concluída',
+            'results': consolidated_results
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro geral na sincronização de roles: {e}")
+        update_global_status(
+            is_running=False,
+            current_status='error',
+            current_operation=f'Erro: {str(e)}'
+        )
         return jsonify({'success': False, 'error': str(e)}), 500
 
 
