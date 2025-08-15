@@ -343,8 +343,7 @@ class KommoSyncService:
             'pipelines': [],
             'custom_fields': {},
             'custom_field_groups': {},
-            'roles': [],
-            'users': []
+            'roles': []
         }
         
         # Extrair pipelines e seus estágios
@@ -457,27 +456,6 @@ class KommoSyncService:
         except Exception as e:
             logger.error(f"Erro ao extrair roles: {e}")
             config['roles'] = []
-        
-        # Extrair usuários
-        logger.info("👥 Extraindo usuários da conta master...")
-        try:
-            users = self.master_api.get_users()
-            for user in users:
-                user_data = {
-                    'id': user['id'],
-                    'name': user['name'],
-                    'email': user.get('email', ''),
-                    'role_id': user.get('role_id'),
-                    'is_active': user.get('is_active', True),
-                    'is_admin': user.get('is_admin', False),
-                    'language': user.get('language', 'pt'),
-                }
-                config['users'].append(user_data)
-                logger.debug(f"Usuário extraído: {user['name']} (email: {user.get('email', 'N/A')}, role: {user.get('role_id', 'N/A')})")
-            logger.info(f"✅ {len(config['users'])} usuários extraídos")
-        except Exception as e:
-            logger.error(f"Erro ao extrair usuários: {e}")
-            config['users'] = []
         
         return config
     
@@ -1259,37 +1237,86 @@ class KommoSyncService:
                 logger.info(f"🔄 Processando role: {role_name}")
                 
                 try:
+                    # Preparar dados da role
+                    role_data = {
+                        'name': master_role['name'],
+                        'rights': {}
+                    }
+                    
+                    # Copiar direitos (rights) da role master
+                    master_rights = master_role.get('rights', {})
+                    
+                    # Direitos básicos para entidades
+                    for entity in ['leads', 'contacts', 'companies', 'tasks']:
+                        if entity in master_rights:
+                            role_data['rights'][entity] = master_rights[entity].copy()
+                    
+                    # Direitos de acesso especiais
+                    role_data['rights']['mail_access'] = master_rights.get('mail_access', False)
+                    role_data['rights']['catalog_access'] = master_rights.get('catalog_access', False)
+                    role_data['rights']['files_access'] = master_rights.get('files_access', False)
+                    
+                    # Direitos de status - precisam ser mapeados para IDs da slave
+                    if master_rights.get('status_rights'):
+                        mapped_status_rights = []
+                        for status_right in master_rights['status_rights']:
+                            master_pipeline_id = status_right.get('pipeline_id')
+                            master_status_id = status_right.get('status_id')
+                            
+                            # Mapear IDs da master para IDs da slave usando os mappings
+                            slave_pipeline_id = mappings.get('pipelines', {}).get(master_pipeline_id)
+                            slave_status_id = mappings.get('stages', {}).get(master_status_id)
+                            
+                            if slave_pipeline_id and slave_status_id:
+                                mapped_status_right = {
+                                    'entity_type': status_right.get('entity_type', 'leads'),
+                                    'pipeline_id': slave_pipeline_id,
+                                    'status_id': slave_status_id,
+                                    'rights': status_right.get('rights', {}).copy()
+                                }
+                                mapped_status_rights.append(mapped_status_right)
+                                logger.debug(f"Status right mapeado: pipeline {master_pipeline_id}->{slave_pipeline_id}, status {master_status_id}->{slave_status_id}")
+                            else:
+                                logger.warning(f"⚠️ Status right não mapeado: pipeline {master_pipeline_id}, status {master_status_id}")
+                        
+                        role_data['rights']['status_rights'] = mapped_status_rights
+                        logger.info(f"📊 Role '{role_name}': {len(mapped_status_rights)} status_rights mapeados de {len(master_rights['status_rights'])} originais")
+                    
+                    # Outros direitos opcionais
+                    if 'catalog_rights' in master_rights:
+                        role_data['rights']['catalog_rights'] = master_rights['catalog_rights']
+                    if 'custom_fields_rights' in master_rights:
+                        role_data['rights']['custom_fields_rights'] = master_rights['custom_fields_rights']
+                    
                     if role_name in existing_roles:
-                        # Role já existe - verificar se precisa atualizar
+                        # Role já existe - atualizar permissões
                         existing_role = existing_roles[role_name]
                         slave_role_id = existing_role['id']
                         
-                        # Comparar permissões (rights)
-                        needs_update = False
-                        update_data = {}
-                        
-                        if existing_role.get('rights', {}) != master_role.get('rights', {}):
-                            update_data['rights'] = master_role.get('rights', {})
-                            needs_update = True
-                            logger.info(f"Permissões da role '{role_name}' serão atualizadas")
-                        
-                        if needs_update:
-                            logger.info(f"🔄 Atualizando role '{role_name}' (ID: {slave_role_id})")
-                            slave_api.update_role(slave_role_id, update_data)
-                            results['updated'] += 1
-                        else:
-                            logger.info(f"✅ Role '{role_name}' já está sincronizada")
-                            results['skipped'] += 1
+                        logger.info(f"🔄 Atualizando role existente '{role_name}' (ID: {slave_role_id})")
+                        slave_api.update_role(slave_role_id, role_data)
+                        results['updated'] += 1
+                        logger.info(f"✅ Role '{role_name}' atualizada com sucesso")
                     else:
                         # Criar nova role
-                        role_data = {
-                            'name': master_role['name'],
-                            'rights': master_role.get('rights', {})
-                        }
-                        
-                        logger.info(f"🆕 Criando role '{role_name}'")
+                        logger.info(f"🆕 Criando nova role '{role_name}'")
                         response = slave_api.create_role(role_data)
-                        slave_role_id = response['_embedded']['roles'][0]['id']
+                        
+                        # Extrair ID da resposta (pode variar conforme estrutura da API)
+                        if '_embedded' in response and 'roles' in response['_embedded']:
+                            slave_role_id = response['_embedded']['roles'][0]['id']
+                        elif 'id' in response:
+                            slave_role_id = response['id']
+                        else:
+                            # Fallback: buscar pela role recém-criada
+                            updated_roles = slave_api.get_roles()
+                            for role in updated_roles:
+                                if role['name'] == role_name:
+                                    slave_role_id = role['id']
+                                    break
+                            else:
+                                raise Exception(f"Não foi possível obter ID da role '{role_name}' criada")
+                        
                         results['created'] += 1
                         logger.info(f"✅ Role '{role_name}' criada com ID: {slave_role_id}")
                     
@@ -1297,7 +1324,8 @@ class KommoSyncService:
                     mappings['roles'][master_role['id']] = slave_role_id
                     
                 except Exception as e:
-                    logger.error(f"Erro ao processar role '{role_name}': {e}")
+                    logger.error(f"❌ Erro ao processar role '{role_name}': {e}")
+                    results['errors'].append(f"Role '{role_name}': {str(e)}")
                     raise
             
             # Processar roles em lotes

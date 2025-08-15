@@ -288,6 +288,12 @@ def trigger_group_sync(group_id, sync_type='full', batch_config=None):
                                 group.id, slave_account.id
                             )
                             account_results['custom_fields'] = custom_fields_results
+                        
+                        if sync_type in ['roles']:
+                            roles_results = sync_service.sync_roles_to_slave(
+                                slave_api, master_config, mappings, progress_callback
+                            )
+                            account_results['roles'] = roles_results
                     
                     sync_results['accounts_processed'] += 1
                     sync_results['details'].append(account_results)
@@ -373,7 +379,7 @@ def trigger_sync():
     """Aciona a sincronização manual das configurações - COM SUPORTE A LOTES"""
     try:
         data = request.get_json() or {}
-        sync_type = data.get('sync_type', 'full')  # 'pipelines', 'custom_fields', 'required_statuses', 'full'
+        sync_type = data.get('sync_type', 'full')  # 'pipelines', 'custom_fields', 'required_statuses', 'roles', 'full'
         
         # Configurações de lote (com valores padrão)
         batch_config = data.get('batch_config', {})
@@ -502,6 +508,12 @@ def trigger_sync():
                                 account.id, slave_account.id  # Assumindo que account é o grupo aqui
                             )
                             account_results['custom_fields'] = custom_fields_results
+                        
+                        if sync_type in ['roles']:
+                            roles_results = sync_service.sync_roles_to_slave(
+                                slave_api, master_config, mappings, progress_callback
+                            )
+                            account_results['roles'] = roles_results
                     
                     # Note: required_statuses é sincronizado junto com custom_fields
                     # pois eles fazem parte da configuração dos campos personalizados
@@ -1227,6 +1239,11 @@ def sync_single_account(account_id):
                 result = sync_service.sync_custom_fields([account.subdomain])
             elif sync_type == 'required_statuses':
                 result = sync_service.sync_required_statuses([account.subdomain])
+            elif sync_type == 'roles':
+                # Para sincronização de roles individual, usar o método moderno
+                master_config = sync_service.extract_master_configuration()
+                mappings = {'pipelines': {}, 'stages': {}, 'custom_fields': {}, 'roles': {}}
+                result = sync_service.sync_roles_to_slave(slave_api, master_config, mappings)
             else:
                 return jsonify({'success': False, 'error': f'Tipo de sincronização inválido: {sync_type}'}), 400
             
