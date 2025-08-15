@@ -1231,6 +1231,23 @@ class KommoSyncService:
             if 'roles' not in mappings:
                 mappings['roles'] = {}
             
+            # Log detalhado dos mapeamentos disponíveis para debug
+            logger.info(f"📋 Mapeamentos disponíveis para sincronização de roles:")
+            logger.info(f"   - Pipelines: {len(mappings.get('pipelines', {}))} mapeamentos")
+            logger.info(f"   - Stages: {len(mappings.get('stages', {}))} mapeamentos")
+            
+            if logger.isEnabledFor(logging.DEBUG):
+                pipelines_sample = list(mappings.get('pipelines', {}).items())[:3]
+                stages_sample = list(mappings.get('stages', {}).items())[:3]
+                logger.debug(f"Amostra de pipelines: {pipelines_sample}")
+                logger.debug(f"Amostra de stages: {stages_sample}")
+            
+            # Verificar se temos mapeamentos suficientes
+            if not mappings.get('pipelines'):
+                logger.warning("❌ ATENÇÃO: Nenhum mapeamento de pipelines encontrado - status_rights podem não funcionar corretamente")
+            if not mappings.get('stages'):
+                logger.warning("❌ ATENÇÃO: Nenhum mapeamento de stages encontrado - status_rights podem não funcionar corretamente")
+            
             # FASE 1: Criar/Atualizar roles da master
             def process_role(master_role, results):
                 role_name = master_role['name']
@@ -1259,28 +1276,80 @@ class KommoSyncService:
                     # Direitos de status - precisam ser mapeados para IDs da slave
                     if master_rights.get('status_rights'):
                         mapped_status_rights = []
-                        for status_right in master_rights['status_rights']:
+                        logger.info(f"🎯 Mapeando {len(master_rights['status_rights'])} status_rights para role '{role_name}'")
+                        
+                        # Verificar se temos mapeamentos disponíveis
+                        pipelines_mapping = mappings.get('pipelines', {})
+                        stages_mapping = mappings.get('stages', {})
+                        
+                        logger.debug(f"Mapeamentos disponíveis: {len(pipelines_mapping)} pipelines, {len(stages_mapping)} stages")
+                        
+                        for i, status_right in enumerate(master_rights['status_rights'], 1):
                             master_pipeline_id = status_right.get('pipeline_id')
                             master_status_id = status_right.get('status_id')
+                            entity_type = status_right.get('entity_type', 'leads')
+                            rights = status_right.get('rights', {})
                             
-                            # Mapear IDs da master para IDs da slave usando os mappings
-                            slave_pipeline_id = mappings.get('pipelines', {}).get(master_pipeline_id)
-                            slave_status_id = mappings.get('stages', {}).get(master_status_id)
+                            logger.debug(f"  {i}. Processando status_right: entity={entity_type}, pipeline={master_pipeline_id}, status={master_status_id}")
+                            logger.debug(f"     Rights: {rights}")
                             
-                            if slave_pipeline_id and slave_status_id:
-                                mapped_status_right = {
-                                    'entity_type': status_right.get('entity_type', 'leads'),
-                                    'pipeline_id': slave_pipeline_id,
-                                    'status_id': slave_status_id,
-                                    'rights': status_right.get('rights', {}).copy()
-                                }
-                                mapped_status_rights.append(mapped_status_right)
-                                logger.debug(f"Status right mapeado: pipeline {master_pipeline_id}->{slave_pipeline_id}, status {master_status_id}->{slave_status_id}")
-                            else:
-                                logger.warning(f"⚠️ Status right não mapeado: pipeline {master_pipeline_id}, status {master_status_id}")
+                            # Mapear pipeline_id da master para slave
+                            slave_pipeline_id = pipelines_mapping.get(master_pipeline_id)
+                            if not slave_pipeline_id:
+                                logger.warning(f"     ❌ Pipeline {master_pipeline_id} não encontrado nos mapeamentos - pulando")
+                                continue
+                            
+                            # Mapear status_id da master para slave
+                            slave_status_id = stages_mapping.get(master_status_id)
+                            if not slave_status_id:
+                                logger.warning(f"     ❌ Status {master_status_id} não encontrado nos mapeamentos - pulando")
+                                continue
+                            
+                            # Validar que os direitos (rights) são válidos
+                            valid_rights = {}
+                            valid_right_types = ['view', 'edit', 'add', 'delete', 'export']
+                            valid_right_values = ['A', 'G', 'D', 'N']  # A=All, G=Group, D=Department, N=None
+                            
+                            for right_type, right_value in rights.items():
+                                if right_type in valid_right_types:
+                                    if right_value in valid_right_values:
+                                        valid_rights[right_type] = right_value
+                                    else:
+                                        logger.warning(f"     ⚠️ Valor inválido '{right_value}' para direito '{right_type}' - usando 'A'")
+                                        valid_rights[right_type] = 'A'
+                                else:
+                                    logger.debug(f"     🔍 Tipo de direito desconhecido ignorado: {right_type}")
+                            
+                            # Garantir que pelo menos 'view' esteja presente
+                            if not valid_rights:
+                                logger.warning(f"     ⚠️ Nenhum direito válido encontrado - adicionando 'view': 'A'")
+                                valid_rights = {'view': 'A'}
+                            elif 'view' not in valid_rights:
+                                logger.debug(f"     🔍 Adicionando direito 'view': 'A' (obrigatório)")
+                                valid_rights['view'] = 'A'
+                            
+                            mapped_status_right = {
+                                'entity_type': entity_type,
+                                'pipeline_id': slave_pipeline_id,
+                                'status_id': slave_status_id,
+                                'rights': valid_rights
+                            }
+                            mapped_status_rights.append(mapped_status_right)
+                            logger.info(f"     ✅ Status right mapeado: pipeline {master_pipeline_id}->{slave_pipeline_id}, status {master_status_id}->{slave_status_id}")
+                            logger.debug(f"        Rights aplicados: {valid_rights}")
                         
-                        role_data['rights']['status_rights'] = mapped_status_rights
-                        logger.info(f"📊 Role '{role_name}': {len(mapped_status_rights)} status_rights mapeados de {len(master_rights['status_rights'])} originais")
+                        if mapped_status_rights:
+                            role_data['rights']['status_rights'] = mapped_status_rights
+                            logger.info(f"📊 Role '{role_name}': {len(mapped_status_rights)} status_rights mapeados de {len(master_rights['status_rights'])} originais")
+                            
+                            # Log detalhado do resultado final
+                            logger.debug(f"Status rights finais para role '{role_name}':")
+                            for sr in mapped_status_rights:
+                                logger.debug(f"  - {sr['entity_type']}: pipeline={sr['pipeline_id']}, status={sr['status_id']}, rights={sr['rights']}")
+                        else:
+                            logger.warning(f"❌ Nenhum status_right válido mapeado para role '{role_name}' - role terá apenas permissões gerais")
+                    else:
+                        logger.debug(f"Role '{role_name}' não tem status_rights específicos")
                     
                     # Outros direitos opcionais
                     if 'catalog_rights' in master_rights:
@@ -1288,18 +1357,45 @@ class KommoSyncService:
                     if 'custom_fields_rights' in master_rights:
                         role_data['rights']['custom_fields_rights'] = master_rights['custom_fields_rights']
                     
+                    # Validação final dos dados da role antes de enviar
+                    logger.debug(f"Dados finais da role '{role_name}': {role_data}")
+                    
+                    # Verificar se tem permissões básicas (obrigatórias)
+                    required_entities = ['leads', 'contacts', 'companies']
+                    for entity in required_entities:
+                        if entity not in role_data['rights']:
+                            logger.warning(f"⚠️ Role '{role_name}' não tem permissões para '{entity}' - adicionando permissões padrão")
+                            role_data['rights'][entity] = {
+                                'view': 'A',
+                                'edit': 'A',
+                                'add': 'A',
+                                'delete': 'A',
+                                'export': 'A'
+                            }
+                    
                     if role_name in existing_roles:
                         # Role já existe - atualizar permissões
                         existing_role = existing_roles[role_name]
                         slave_role_id = existing_role['id']
                         
                         logger.info(f"🔄 Atualizando role existente '{role_name}' (ID: {slave_role_id})")
+                        
+                        # Log das diferenças antes da atualização
+                        if logger.isEnabledFor(logging.DEBUG):
+                            existing_rights = existing_role.get('rights', {})
+                            new_rights = role_data['rights']
+                            logger.debug(f"Comparando permissões da role '{role_name}':")
+                            logger.debug(f"  Existente: {existing_rights}")
+                            logger.debug(f"  Nova: {new_rights}")
+                        
                         slave_api.update_role(slave_role_id, role_data)
                         results['updated'] += 1
                         logger.info(f"✅ Role '{role_name}' atualizada com sucesso")
                     else:
                         # Criar nova role
                         logger.info(f"🆕 Criando nova role '{role_name}'")
+                        logger.debug(f"Dados que serão enviados: {role_data}")
+                        
                         response = slave_api.create_role(role_data)
                         
                         # Extrair ID da resposta (pode variar conforme estrutura da API)
@@ -1319,14 +1415,64 @@ class KommoSyncService:
                         
                         results['created'] += 1
                         logger.info(f"✅ Role '{role_name}' criada com ID: {slave_role_id}")
+                        
+                        # Verificar se a role foi criada corretamente
+                        if logger.isEnabledFor(logging.DEBUG):
+                            try:
+                                created_role = next((r for r in slave_api.get_roles() if r['id'] == slave_role_id), None)
+                                if created_role:
+                                    logger.debug(f"Role criada verificada: {created_role.get('name')} com {len(created_role.get('rights', {}).get('status_rights', []))} status_rights")
+                                else:
+                                    logger.warning(f"⚠️ Não foi possível verificar a role criada com ID {slave_role_id}")
+                            except Exception as verify_error:
+                                logger.debug(f"Erro na verificação da role criada: {verify_error}")
                     
                     # Armazenar mapeamento
                     mappings['roles'][master_role['id']] = slave_role_id
                     
                 except Exception as e:
                     logger.error(f"❌ Erro ao processar role '{role_name}': {e}")
-                    results['errors'].append(f"Role '{role_name}': {str(e)}")
-                    raise
+                    
+                    # Log detalhado do erro para debug
+                    if logger.isEnabledFor(logging.DEBUG):
+                        import traceback
+                        logger.debug(f"Traceback completo: {traceback.format_exc()}")
+                        logger.debug(f"Dados da role que causaram erro: {role_data}")
+                    
+                    # Tentar identificar o tipo de erro
+                    error_str = str(e).lower()
+                    if 'status_rights' in error_str or 'pipeline_id' in error_str or 'status_id' in error_str:
+                        logger.error(f"🎯 Erro relacionado a status_rights - verifique os mapeamentos de pipelines/stages")
+                        
+                        # Tentar criar role sem status_rights como fallback
+                        logger.info(f"🔄 Tentando criar role '{role_name}' sem status_rights como fallback...")
+                        try:
+                            fallback_role_data = role_data.copy()
+                            if 'status_rights' in fallback_role_data['rights']:
+                                del fallback_role_data['rights']['status_rights']
+                            
+                            if role_name not in existing_roles:
+                                # Só tentar criar se não existe
+                                response = slave_api.create_role(fallback_role_data)
+                                if '_embedded' in response and 'roles' in response['_embedded']:
+                                    slave_role_id = response['_embedded']['roles'][0]['id']
+                                elif 'id' in response:
+                                    slave_role_id = response['id']
+                                
+                                mappings['roles'][master_role['id']] = slave_role_id
+                                results['created'] += 1
+                                logger.warning(f"⚠️ Role '{role_name}' criada SEM status_rights específicos (ID: {slave_role_id})")
+                            else:
+                                results['skipped'] += 1
+                                logger.warning(f"⚠️ Role '{role_name}' já existe - pulando devido a erro nos status_rights")
+                        except Exception as fallback_error:
+                            logger.error(f"❌ Fallback também falhou: {fallback_error}")
+                            results['errors'].append(f"Role '{role_name}': {str(e)} (fallback também falhou: {str(fallback_error)})")
+                    else:
+                        results['errors'].append(f"Role '{role_name}': {str(e)}")
+                    
+                    # Continuar com próxima role em vez de parar tudo
+                    continue
             
             # Processar roles em lotes
             self._process_in_batches(
@@ -2251,6 +2397,15 @@ class KommoSyncService:
             # FASE 4: Sincronizar roles (funções/permissões)
             if not self._stop_sync:
                 logger.info("🔐 FASE 4: Sincronizando roles em lotes...")
+                
+                # Salvar mapeamentos no banco antes de sincronizar roles (para garantir que estejam atualizados)
+                if sync_group_id and slave_account_id:
+                    try:
+                        self._save_mappings_to_database(mappings, sync_group_id, slave_account_id)
+                        logger.info("💾 Mapeamentos salvos no banco antes da sincronização de roles")
+                    except Exception as mapping_error:
+                        logger.warning(f"⚠️ Erro ao salvar mapeamentos antes das roles: {mapping_error}")
+                
                 roles_results = self.sync_roles_to_slave(slave_api, master_config, mappings, progress_callback)
                 total_results['roles'] = roles_results
                 logger.info(f"Roles: {roles_results['created']} criadas, {roles_results['updated']} atualizadas, "
