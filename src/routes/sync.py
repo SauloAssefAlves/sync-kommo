@@ -1096,7 +1096,9 @@ def sync_roles_only():
                     slave_api=slave_api,
                     master_config=master_config,
                     mappings=mappings,
-                    progress_callback=progress_callback
+                    progress_callback=progress_callback,
+                    sync_group_id=slave_account.sync_group_id,
+                    slave_account_id=slave_account.id
                 )
                 
                 # Registrar resultado
@@ -1240,10 +1242,16 @@ def sync_single_account(account_id):
             elif sync_type == 'required_statuses':
                 result = sync_service.sync_required_statuses([account.subdomain])
             elif sync_type == 'roles':
-                # Para sincronização de roles individual, usar o método moderno
+                # Para sincronização de roles individual, usar o método moderno com parâmetros corretos
                 master_config = sync_service.extract_master_configuration()
                 mappings = {'pipelines': {}, 'stages': {}, 'custom_fields': {}, 'roles': {}}
-                result = sync_service.sync_roles_to_slave(slave_api, master_config, mappings)
+                result = sync_service.sync_roles_to_slave(
+                    slave_api, 
+                    master_config, 
+                    mappings,
+                    sync_group_id=account.sync_group_id,
+                    slave_account_id=account.id
+                )
             else:
                 return jsonify({'success': False, 'error': f'Tipo de sincronização inválido: {sync_type}'}), 400
             

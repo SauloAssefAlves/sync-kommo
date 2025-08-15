@@ -1254,18 +1254,24 @@ class KommoSyncService:
         self._stop_sync = False
         
         # CRÍTICO: Se os mapeamentos estão vazios, tentar carregar do banco
-        if (not mappings.get('pipelines') or not mappings.get('stages')) and sync_group_id and slave_account_id:
-            logger.warning("⚠️ Mapeamentos vazios detectados - tentando carregar do banco de dados...")
-            database_mappings = self._load_mappings_from_database(sync_group_id, slave_account_id)
-            
-            # Mesclar mapeamentos do banco com os existentes
-            if database_mappings.get('pipelines'):
-                mappings['pipelines'].update(database_mappings['pipelines'])
-                logger.info(f"📊 Carregados {len(database_mappings['pipelines'])} mapeamentos de pipeline do banco")
-            
-            if database_mappings.get('stages'):
-                mappings['stages'].update(database_mappings['stages'])  
-                logger.info(f"🎭 Carregados {len(database_mappings['stages'])} mapeamentos de stage do banco")
+        if (not mappings.get('pipelines') or not mappings.get('stages')):
+            if sync_group_id and slave_account_id:
+                logger.warning("⚠️ Mapeamentos vazios detectados - tentando carregar do banco de dados...")
+                database_mappings = self._load_mappings_from_database(sync_group_id, slave_account_id)
+                
+                # Mesclar mapeamentos do banco com os existentes
+                if database_mappings.get('pipelines'):
+                    mappings['pipelines'].update(database_mappings['pipelines'])
+                    logger.info(f"📊 Carregados {len(database_mappings['pipelines'])} mapeamentos de pipeline do banco")
+                
+                if database_mappings.get('stages'):
+                    mappings['stages'].update(database_mappings['stages'])  
+                    logger.info(f"🎭 Carregados {len(database_mappings['stages'])} mapeamentos de stage do banco")
+            else:
+                logger.error("🚨 ERRO CRÍTICO: Mapeamentos vazios e sem sync_group_id/slave_account_id para carregar do banco!")
+                logger.error("💡 SOLUÇÃO: Execute primeiro a sincronização de pipelines ou forneça os parâmetros corretos")
+                results['errors'].append("Mapeamentos de pipelines/stages não disponíveis. Execute sincronização completa primeiro.")
+                return results
         
         try:
             # Obter roles existentes na conta escrava
