@@ -593,6 +593,7 @@ class KommoSyncService:
                                 master_stage_id = int(master_stage['id'])
                                 mappings['stages'][master_stage_id] = slave_stage_id
                                 logger.info(f"✅ Mapeando estágio '{master_stage['name']}' -> ID slave {slave_stage_id}")
+                                logger.info(f"🎭 MAPEAMENTO CRIADO (criação): Stage {master_stage_id} -> {slave_stage_id}")
                                 logger.debug(f"🎭 Mapeamento de stage salvo na criação: {master_stage_id} -> {slave_stage_id}")
                                 created_stage_index += 1
                     
@@ -600,6 +601,7 @@ class KommoSyncService:
                     master_pipeline_id = int(master_pipeline['id'])
                     slave_pipeline_id = int(slave_pipeline_id)
                     mappings['pipelines'][master_pipeline_id] = slave_pipeline_id
+                    logger.info(f"📊 MAPEAMENTO CRIADO: Pipeline {master_pipeline_id} -> {slave_pipeline_id}")
                     logger.debug(f"📊 Mapeamento de pipeline salvo: {master_pipeline_id} -> {slave_pipeline_id}")
                     
                     # Se pipeline já existia, sincronizar estágios separadamente
@@ -673,6 +675,22 @@ class KommoSyncService:
                 # Não falhar a sincronização por causa do erro de salvamento
         
         logger.info(f"📊 Sincronização de pipelines concluída: {results}")
+        
+        # Log final dos mapeamentos criados
+        pipeline_mappings_count = len(mappings.get('pipelines', {}))
+        stage_mappings_count = len(mappings.get('stages', {}))
+        logger.info(f"🎯 RESUMO DE MAPEAMENTOS CRIADOS:")
+        logger.info(f"   📊 Pipelines: {pipeline_mappings_count} mapeamentos")
+        logger.info(f"   🎭 Stages: {stage_mappings_count} mapeamentos")
+        
+        if pipeline_mappings_count > 0:
+            sample_pipelines = list(mappings['pipelines'].items())[:2]
+            logger.info(f"   📊 Exemplo pipelines: {sample_pipelines}")
+        
+        if stage_mappings_count > 0:
+            sample_stages = list(mappings['stages'].items())[:2] 
+            logger.info(f"   🎭 Exemplo stages: {sample_stages}")
+            
         return results
     
     def _sync_pipeline_stages(self, slave_api: KommoAPIService, master_pipeline: Dict, slave_pipeline_id: int, mappings: Dict):
@@ -777,6 +795,7 @@ class KommoSyncService:
                     master_stage_id = int(master_stage['id'])
                     slave_stage_id = int(slave_stage_id)
                     mappings['stages'][master_stage_id] = slave_stage_id
+                    logger.info(f"🎭 MAPEAMENTO CRIADO (existente): Stage {master_stage_id} -> {slave_stage_id}")
                     logger.debug(f"🎭 Mapeamento de stage existente salvo: {master_stage_id} -> {slave_stage_id}")
                 else:
                     # Criar novo estágio na conta escrava
@@ -793,6 +812,7 @@ class KommoSyncService:
                     master_stage_id = int(master_stage['id'])
                     slave_stage_id = int(slave_stage_id)
                     mappings['stages'][master_stage_id] = slave_stage_id
+                    logger.info(f"🎭 MAPEAMENTO CRIADO: Stage {master_stage_id} -> {slave_stage_id}")
                     logger.debug(f"🎭 Mapeamento de stage salvo: {master_stage_id} -> {slave_stage_id}")
                 
             except Exception as e:
@@ -1224,13 +1244,28 @@ class KommoSyncService:
         return results
     
     def sync_roles_to_slave(self, slave_api: KommoAPIService, master_config: Dict, 
-                           mappings: Dict, progress_callback: Optional[Callable] = None) -> Dict:
+                           mappings: Dict, progress_callback: Optional[Callable] = None,
+                           sync_group_id: Optional[int] = None, slave_account_id: Optional[int] = None) -> Dict:
         """Sincroniza roles (funções/permissões) da conta mestre para uma conta escrava"""
         logger.info("🔐 Iniciando sincronização de roles...")
         results = {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []}
         
         # Reset da flag de parada
         self._stop_sync = False
+        
+        # CRÍTICO: Se os mapeamentos estão vazios, tentar carregar do banco
+        if (not mappings.get('pipelines') or not mappings.get('stages')) and sync_group_id and slave_account_id:
+            logger.warning("⚠️ Mapeamentos vazios detectados - tentando carregar do banco de dados...")
+            database_mappings = self._load_mappings_from_database(sync_group_id, slave_account_id)
+            
+            # Mesclar mapeamentos do banco com os existentes
+            if database_mappings.get('pipelines'):
+                mappings['pipelines'].update(database_mappings['pipelines'])
+                logger.info(f"📊 Carregados {len(database_mappings['pipelines'])} mapeamentos de pipeline do banco")
+            
+            if database_mappings.get('stages'):
+                mappings['stages'].update(database_mappings['stages'])  
+                logger.info(f"🎭 Carregados {len(database_mappings['stages'])} mapeamentos de stage do banco")
         
         try:
             # Obter roles existentes na conta escrava
@@ -1253,9 +1288,15 @@ class KommoSyncService:
             if mappings.get('pipelines'):
                 pipeline_sample = list(mappings.get('pipelines', {}).items())[:3]
                 logger.info(f"   - Exemplo de pipelines: {pipeline_sample}")
+            else:
+                logger.error(f"🚨 PROBLEMA CRÍTICO: Nenhum mapeamento de pipeline encontrado!")
+                logger.error(f"🔍 Conteúdo completo de mappings: {mappings}")
+                
             if mappings.get('stages'):
                 stages_sample = list(mappings.get('stages', {}).items())[:3]
                 logger.info(f"   - Exemplo de stages: {stages_sample}")
+            else:
+                logger.error(f"🚨 PROBLEMA CRÍTICO: Nenhum mapeamento de stage encontrado!")
             
             if logger.isEnabledFor(logging.DEBUG):
                 pipelines_sample = list(mappings.get('pipelines', {}).items())[:3]
