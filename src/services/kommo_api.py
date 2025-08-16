@@ -239,6 +239,10 @@ class KommoAPIService:
         """Deleta um usuário"""
         return self._make_request('DELETE', f'/users/{user_id}')
     
+    def get_account_info(self) -> Dict:
+        """Obtém informações da conta"""
+        return self._make_request('GET', '/account')
+    
     def test_connection(self) -> bool:
         """Testa se a conexão com a API está funcionando"""
         try:
@@ -1243,543 +1247,8 @@ class KommoSyncService:
         logger.info(f"📁 Sincronização de grupos concluída: {results}")
         return results
     
-    def sync_roles_to_slave(self, slave_api: KommoAPIService, master_config: Dict, 
-                           mappings: Dict, progress_callback: Optional[Callable] = None,
-                           sync_group_id: Optional[int] = None, slave_account_id: Optional[int] = None) -> Dict:
-        """Sincroniza roles (funções/permissões) da conta mestre para uma conta escrava"""
-        logger.info("🔐 Iniciando sincronização de roles...")
-        results = {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []}
-        
-        # Reset da flag de parada
-        self._stop_sync = False
-        
-        # CRÍTICO: Se os mapeamentos estão vazios, tentar carregar do banco
-        if (not mappings.get('pipelines') or not mappings.get('stages')):
-            if sync_group_id and slave_account_id:
-                logger.warning("⚠️ Mapeamentos vazios detectados - tentando carregar do banco de dados...")
-                database_mappings = self._load_mappings_from_database(sync_group_id, slave_account_id)
-                
-                # Mesclar mapeamentos do banco com os existentes
-                if database_mappings.get('pipelines'):
-                    mappings['pipelines'].update(database_mappings['pipelines'])
-                    logger.info(f"📊 Carregados {len(database_mappings['pipelines'])} mapeamentos de pipeline do banco")
-                
-                if database_mappings.get('stages'):
-                    mappings['stages'].update(database_mappings['stages'])  
-                    logger.info(f"🎭 Carregados {len(database_mappings['stages'])} mapeamentos de stage do banco")
-            else:
-                logger.error("🚨 ERRO CRÍTICO: Mapeamentos vazios e sem sync_group_id/slave_account_id para carregar do banco!")
-                logger.error("💡 SOLUÇÃO: Execute primeiro a sincronização de pipelines ou forneça os parâmetros corretos")
-                results['errors'].append("Mapeamentos de pipelines/stages não disponíveis. Execute sincronização completa primeiro.")
-                return results
-        
-        try:
-            # Obter roles existentes na conta escrava
-            existing_roles = {r['name']: r for r in slave_api.get_roles()}
-            master_role_names = {role['name'] for role in master_config['roles']}
-            
-            logger.info(f"📋 Roles existentes na slave: {list(existing_roles.keys())}")
-            logger.info(f"📋 Roles da master: {list(master_role_names)}")
-            
-            # Inicializar mapeamento de roles
-            if 'roles' not in mappings:
-                mappings['roles'] = {}
-            
-            # Log detalhado dos mapeamentos disponíveis para debug
-            logger.info(f"📋 Mapeamentos disponíveis para sincronização de roles:")
-            logger.info(f"   - Pipelines: {len(mappings.get('pipelines', {}))} mapeamentos")
-            logger.info(f"   - Stages: {len(mappings.get('stages', {}))} mapeamentos")
-            
-            # Log de exemplo dos mapeamentos se houver
-            if mappings.get('pipelines'):
-                pipeline_sample = list(mappings.get('pipelines', {}).items())[:3]
-                logger.info(f"   - Exemplo de pipelines: {pipeline_sample}")
-            else:
-                logger.error(f"🚨 PROBLEMA CRÍTICO: Nenhum mapeamento de pipeline encontrado!")
-                logger.error(f"🔍 Conteúdo completo de mappings: {mappings}")
-                
-            if mappings.get('stages'):
-                stages_sample = list(mappings.get('stages', {}).items())[:3]
-                logger.info(f"   - Exemplo de stages: {stages_sample}")
-            else:
-                logger.error(f"🚨 PROBLEMA CRÍTICO: Nenhum mapeamento de stage encontrado!")
-            
-            if logger.isEnabledFor(logging.DEBUG):
-                pipelines_sample = list(mappings.get('pipelines', {}).items())[:3]
-                stages_sample = list(mappings.get('stages', {}).items())[:3]
-                logger.debug(f"Amostra de pipelines: {pipelines_sample}")
-                logger.debug(f"Amostra de stages: {stages_sample}")
-            
-            # Verificar se temos mapeamentos suficientes
-            if not mappings.get('pipelines'):
-                logger.warning("❌ ATENÇÃO: Nenhum mapeamento de pipelines encontrado - status_rights podem não funcionar corretamente")
-            if not mappings.get('stages'):
-                logger.warning("❌ ATENÇÃO: Nenhum mapeamento de stages encontrado - status_rights podem não funcionar corretamente")
-            
-            # FASE 1: Criar/Atualizar roles da master
-            def process_role(master_role, results):
-                role_name = master_role['name']
-                logger.info(f"🔄 Processando role: {role_name}")
-                
-                try:
-                    # Preparar dados da role
-                    role_data = {
-                        'name': master_role['name'],
-                        'rights': {}
-                    }
-                    
-                    # Copiar direitos (rights) da role master
-                    master_rights = master_role.get('rights', {})
-                    
-                    # Direitos básicos para entidades
-                    for entity in ['leads', 'contacts', 'companies', 'tasks']:
-                        if entity in master_rights:
-                            role_data['rights'][entity] = master_rights[entity].copy()
-                    
-                    # Direitos de acesso especiais
-                    role_data['rights']['mail_access'] = master_rights.get('mail_access', False)
-                    role_data['rights']['catalog_access'] = master_rights.get('catalog_access', False)
-                    role_data['rights']['files_access'] = master_rights.get('files_access', False)
-                    
-                    # Direitos de status - precisam ser mapeados para IDs da slave
-                    if master_rights.get('status_rights'):
-                        mapped_status_rights = []
-                        logger.info(f"🎯 Mapeando {len(master_rights['status_rights'])} status_rights para role '{role_name}'")
-                        
-                        # Verificar se temos mapeamentos disponíveis
-                        pipelines_mapping = mappings.get('pipelines', {})
-                        stages_mapping = mappings.get('stages', {})
-                        
-                        logger.debug(f"Mapeamentos disponíveis: {len(pipelines_mapping)} pipelines, {len(stages_mapping)} stages")
-                        
-                        # Log detalhado dos mapeamentos para debug
-                        if logger.isEnabledFor(logging.DEBUG):
-                            logger.debug(f"📊 Pipelines mapping completo: {pipelines_mapping}")
-                            logger.debug(f"🎭 Stages mapping completo: {stages_mapping}")
-                        
-                        for i, status_right in enumerate(master_rights['status_rights'], 1):
-                            master_pipeline_id = status_right.get('pipeline_id')
-                            master_status_id = status_right.get('status_id')
-                            entity_type = status_right.get('entity_type', 'leads')
-                            rights = status_right.get('rights', {})
-                            
-                            logger.debug(f"  {i}. Processando status_right: entity={entity_type}, pipeline={master_pipeline_id}, status={master_status_id}")
-                            logger.debug(f"     Rights: {rights}")
-                            
-                            # 🚨 DETECTAR IDs SUSPEITOS: IDs da slave na role master
-                            if master_status_id and str(master_status_id).startswith(('896', '897', '905')):
-                                logger.warning(f"     🚨 ID SUSPEITO: Status {master_status_id} parece ser da SLAVE, não da MASTER!")
-                                logger.warning(f"     💡 Role master pode ter dados incorretos - verificar origem desta role")
-                            
-                            # Converter IDs para inteiros para garantir compatibilidade
-                            try:
-                                master_pipeline_id = int(master_pipeline_id) if master_pipeline_id else None
-                                master_status_id = int(master_status_id) if master_status_id else None
-                            except (ValueError, TypeError):
-                                logger.warning(f"     ❌ IDs inválidos: pipeline={master_pipeline_id}, status={master_status_id} - pulando")
-                                continue
-                            
-                            # Mapear pipeline_id da master para slave
-                            slave_pipeline_id = pipelines_mapping.get(master_pipeline_id)
-                            if not slave_pipeline_id:
-                                logger.warning(f"     ❌ Pipeline {master_pipeline_id} não encontrado nos mapeamentos - pulando")
-                                logger.warning(f"     🔍 Mapeamentos de pipeline disponíveis: {list(pipelines_mapping.keys())}")
-                                continue
-                            
-                            # Mapear status_id da master para slave
-                            slave_status_id = stages_mapping.get(master_status_id)
-                            if not slave_status_id:
-                                # Diagnóstico melhorado para IDs não encontrados
-                                if str(master_status_id).startswith(('896', '897', '905')):
-                                    logger.warning(f"     ❌ Status {master_status_id} não encontrado nos mapeamentos - ATENÇÃO: Este ID parece ser da SLAVE!")
-                                    logger.warning(f"     🔍 Role master pode conter dados incorretos - este status já pode ser da conta slave")
-                                else:
-                                    logger.warning(f"     ❌ Status {master_status_id} não encontrado nos mapeamentos - pulando")
-                                    
-                                logger.warning(f"     🔍 Mapeamentos de stage disponíveis: {list(stages_mapping.keys())}")
-                                continue
-                            
-                            # Validar que os direitos (rights) são válidos
-                            valid_rights = {}
-                            valid_right_types = ['view', 'edit', 'add', 'delete', 'export']
-                            valid_right_values = ['A', 'G', 'D', 'N']  # A=All, G=Group, D=Department, N=None
-                            
-                            for right_type, right_value in rights.items():
-                                if right_type in valid_right_types:
-                                    if right_value in valid_right_values:
-                                        valid_rights[right_type] = right_value
-                                    else:
-                                        logger.warning(f"     ⚠️ Valor inválido '{right_value}' para direito '{right_type}' - usando 'A'")
-                                        valid_rights[right_type] = 'A'
-                                else:
-                                    logger.debug(f"     🔍 Tipo de direito desconhecido ignorado: {right_type}")
-                            
-                            # Garantir que pelo menos 'view' esteja presente
-                            if not valid_rights:
-                                logger.warning(f"     ⚠️ Nenhum direito válido encontrado - adicionando 'view': 'A'")
-                                valid_rights = {'view': 'A'}
-                            elif 'view' not in valid_rights:
-                                logger.debug(f"     🔍 Adicionando direito 'view': 'A' (obrigatório)")
-                                valid_rights['view'] = 'A'
-                            
-                            mapped_status_right = {
-                                'entity_type': entity_type,
-                                'pipeline_id': int(slave_pipeline_id),
-                                'status_id': int(slave_status_id),
-                                'rights': valid_rights
-                            }
-                            mapped_status_rights.append(mapped_status_right)
-                            logger.info(f"     ✅ Status right mapeado: pipeline {master_pipeline_id}->{slave_pipeline_id}, status {master_status_id}->{slave_status_id}")
-                            logger.debug(f"        Rights aplicados: {valid_rights}")
-                        
-                        if mapped_status_rights:
-                            role_data['rights']['status_rights'] = mapped_status_rights
-                            logger.info(f"📊 Role '{role_name}': {len(mapped_status_rights)} status_rights mapeados de {len(master_rights['status_rights'])} originais")
-                            
-                            # Log detalhado do resultado final
-                            logger.debug(f"Status rights finais para role '{role_name}':")
-                            for sr in mapped_status_rights:
-                                logger.debug(f"  - {sr['entity_type']}: pipeline={sr['pipeline_id']}, status={sr['status_id']}, rights={sr['rights']}")
-                        else:
-                            logger.warning(f"❌ Nenhum status_right válido mapeado para role '{role_name}' - role terá apenas permissões gerais")
-                    else:
-                        logger.debug(f"Role '{role_name}' não tem status_rights específicos")
-                    
-                    # Outros direitos opcionais
-                    if 'catalog_rights' in master_rights:
-                        role_data['rights']['catalog_rights'] = master_rights['catalog_rights']
-                    if 'custom_fields_rights' in master_rights:
-                        role_data['rights']['custom_fields_rights'] = master_rights['custom_fields_rights']
-                    
-                    # Validação final dos dados da role antes de enviar
-                    logger.debug(f"Dados finais da role '{role_name}': {role_data}")
-                    
-                    # Verificar se tem permissões básicas (obrigatórias)
-                    required_entities = ['leads', 'contacts', 'companies']
-                    for entity in required_entities:
-                        if entity not in role_data['rights']:
-                            logger.warning(f"⚠️ Role '{role_name}' não tem permissões para '{entity}' - adicionando permissões padrão")
-                            role_data['rights'][entity] = {
-                                'view': 'A',
-                                'edit': 'A',
-                                'add': 'A',
-                                'delete': 'A',
-                                'export': 'A'
-                            }
-                    
-                    if role_name in existing_roles:
-                        # Role já existe - atualizar permissões
-                        existing_role = existing_roles[role_name]
-                        slave_role_id = existing_role['id']
-                        
-                        logger.info(f"🔄 Atualizando role existente '{role_name}' (ID: {slave_role_id})")
-                        
-                        # VALIDAÇÃO PRÉVIA: Verificar se todos os status_ids existem realmente na slave
-                        if 'status_rights' in role_data['rights']:
-                            logger.debug(f"🔍 Validando {len(role_data['rights']['status_rights'])} status_rights antes da atualização...")
-                            
-                            # Buscar todos os status disponíveis na slave
-                            try:
-                                slave_pipelines = slave_api.get_pipelines()
-                                all_slave_status_ids = set()
-                                for pipeline in slave_pipelines:
-                                    for stage in pipeline.get('_embedded', {}).get('statuses', []):
-                                        all_slave_status_ids.add(int(stage['id']))
-                                
-                                logger.debug(f"🔍 Total de status disponíveis na slave: {len(all_slave_status_ids)}")
-                                
-                                # Filtrar apenas status_rights válidos
-                                validated_status_rights = []
-                                for sr in role_data['rights']['status_rights']:
-                                    status_id = int(sr['status_id'])
-                                    if status_id in all_slave_status_ids:
-                                        validated_status_rights.append(sr)
-                                    else:
-                                        logger.warning(f"     🚫 Status {status_id} não existe na slave - removendo da requisição")
-                                
-                                # Atualizar com apenas os status_rights válidos
-                                role_data['rights']['status_rights'] = validated_status_rights
-                                logger.info(f"✅ Validação concluída: {len(validated_status_rights)} de {len(role_data['rights']['status_rights']) if 'status_rights' in role_data['rights'] else 0} status_rights são válidos")
-                                
-                            except Exception as e:
-                                logger.error(f"❌ Erro na validação prévia de status_rights: {e}")
-                                logger.info("⚠️ Prosseguindo sem validação prévia...")
-                        
-                        # Log das diferenças antes da atualização
-                        if logger.isEnabledFor(logging.DEBUG):
-                            existing_rights = existing_role.get('rights', {})
-                            new_rights = role_data['rights']
-                            logger.debug(f"Comparando permissões da role '{role_name}':")
-                            logger.debug(f"  Existente: {existing_rights}")
-                            logger.debug(f"  Nova: {new_rights}")
-                        
-                        slave_api.update_role(slave_role_id, role_data)
-                        results['updated'] += 1
-                        logger.info(f"✅ Role '{role_name}' atualizada com sucesso")
-                    else:
-                        # Criar nova role
-                        logger.info(f"🆕 Criando nova role '{role_name}'")
-                        
-                        # VALIDAÇÃO PRÉVIA: Verificar se todos os status_ids existem realmente na slave
-                        if 'status_rights' in role_data['rights']:
-                            logger.debug(f"🔍 Validando {len(role_data['rights']['status_rights'])} status_rights antes da criação...")
-                            
-                            # Buscar todos os status disponíveis na slave
-                            try:
-                                slave_pipelines = slave_api.get_pipelines()
-                                all_slave_status_ids = set()
-                                for pipeline in slave_pipelines:
-                                    for stage in pipeline.get('_embedded', {}).get('statuses', []):
-                                        all_slave_status_ids.add(int(stage['id']))
-                                
-                                logger.debug(f"🔍 Total de status disponíveis na slave: {len(all_slave_status_ids)}")
-                                
-                                # Filtrar apenas status_rights válidos
-                                validated_status_rights = []
-                                for sr in role_data['rights']['status_rights']:
-                                    status_id = int(sr['status_id'])
-                                    if status_id in all_slave_status_ids:
-                                        validated_status_rights.append(sr)
-                                    else:
-                                        logger.warning(f"     🚫 Status {status_id} não existe na slave - removendo da requisição")
-                                
-                                # Atualizar com apenas os status_rights válidos
-                                role_data['rights']['status_rights'] = validated_status_rights
-                                logger.info(f"✅ Validação concluída: {len(validated_status_rights)} status_rights são válidos")
-                                
-                            except Exception as e:
-                                logger.error(f"❌ Erro na validação prévia de status_rights: {e}")
-                                logger.info("⚠️ Prosseguindo sem validação prévia...")
-                        
-                        logger.debug(f"Dados que serão enviados: {role_data}")
-                        
-                        response = slave_api.create_role(role_data)
-                        
-                        # Extrair ID da resposta (pode variar conforme estrutura da API)
-                        if '_embedded' in response and 'roles' in response['_embedded']:
-                            slave_role_id = response['_embedded']['roles'][0]['id']
-                        elif 'id' in response:
-                            slave_role_id = response['id']
-                        else:
-                            # Fallback: buscar pela role recém-criada
-                            updated_roles = slave_api.get_roles()
-                            for role in updated_roles:
-                                if role['name'] == role_name:
-                                    slave_role_id = role['id']
-                                    break
-                            else:
-                                raise Exception(f"Não foi possível obter ID da role '{role_name}' criada")
-                        
-                        results['created'] += 1
-                        logger.info(f"✅ Role '{role_name}' criada com ID: {slave_role_id}")
-                        
-                        # Verificar se a role foi criada corretamente
-                        if logger.isEnabledFor(logging.DEBUG):
-                            try:
-                                created_role = next((r for r in slave_api.get_roles() if r['id'] == slave_role_id), None)
-                                if created_role:
-                                    logger.debug(f"Role criada verificada: {created_role.get('name')} com {len(created_role.get('rights', {}).get('status_rights', []))} status_rights")
-                                else:
-                                    logger.warning(f"⚠️ Não foi possível verificar a role criada com ID {slave_role_id}")
-                            except Exception as verify_error:
-                                logger.debug(f"Erro na verificação da role criada: {verify_error}")
-                    
-                    # Armazenar mapeamento
-                    mappings['roles'][master_role['id']] = slave_role_id
-                    
-                except Exception as e:
-                    logger.error(f"❌ Erro ao processar role '{role_name}': {e}")
-                    
-                    # Log detalhado do erro para debug
-                    if logger.isEnabledFor(logging.DEBUG):
-                        import traceback
-                        logger.debug(f"Traceback completo: {traceback.format_exc()}")
-                        logger.debug(f"Dados da role que causaram erro: {role_data}")
-                    
-                    # Tentar identificar o tipo de erro
-                    error_str = str(e).lower()
-                    if 'status_rights' in error_str or 'pipeline_id' in error_str or 'status_id' in error_str:
-                        logger.error(f"🎯 Erro relacionado a status_rights - verifique os mapeamentos de pipelines/stages")
-                        
-                        # Tentar criar role sem status_rights como fallback
-                        logger.info(f"🔄 Tentando criar role '{role_name}' sem status_rights como fallback...")
-                        try:
-                            fallback_role_data = role_data.copy()
-                            if 'status_rights' in fallback_role_data['rights']:
-                                del fallback_role_data['rights']['status_rights']
-                            
-                            if role_name not in existing_roles:
-                                # Só tentar criar se não existe
-                                response = slave_api.create_role(fallback_role_data)
-                                if '_embedded' in response and 'roles' in response['_embedded']:
-                                    slave_role_id = response['_embedded']['roles'][0]['id']
-                                elif 'id' in response:
-                                    slave_role_id = response['id']
-                                
-                                mappings['roles'][master_role['id']] = slave_role_id
-                                results['created'] += 1
-                                logger.warning(f"⚠️ Role '{role_name}' criada SEM status_rights específicos (ID: {slave_role_id})")
-                            else:
-                                results['skipped'] += 1
-                                logger.warning(f"⚠️ Role '{role_name}' já existe - pulando devido a erro nos status_rights")
-                        except Exception as fallback_error:
-                            logger.error(f"❌ Fallback também falhou: {fallback_error}")
-                            results['errors'].append(f"Role '{role_name}': {str(e)} (fallback também falhou: {str(fallback_error)})")
-                    else:
-                        results['errors'].append(f"Role '{role_name}': {str(e)}")
-                    
-                    # Retornar da função em caso de erro
-                    return
-            
-            # Processar roles em lotes
-            self._process_in_batches(
-                items=master_config['roles'],
-                process_func=process_role,
-                operation_name="roles",
-                results=results,
-                progress_callback=progress_callback
-            )
-            
-            if self._stop_sync:
-                return results
-            
-            # FASE 2: Deletar roles que existem na slave mas NÃO existem na master
-            roles_to_delete = []
-            for slave_role_name, slave_role in existing_roles.items():
-                if slave_role_name not in master_role_names:
-                    # Não deletar role de admin ou roles do sistema
-                    if not slave_role.get('is_system', False) and slave_role_name.lower() not in ['admin', 'administrator', 'administrador']:
-                        roles_to_delete.append(slave_role)
-            
-            def delete_role(role_to_delete, results):
-                role_name = role_to_delete['name']
-                role_id = role_to_delete['id']
-                logger.info(f"🗑️ Deletando role '{role_name}' (ID: {role_id})")
-                
-                try:
-                    delete_response = slave_api.delete_role(role_id)
-                    if delete_response.get('success') or delete_response.get('status_code') in [200, 204]:
-                        results['deleted'] += 1
-                        logger.info(f"✅ Role '{role_name}' deletada com sucesso")
-                    else:
-                        results['deleted'] += 1  # Considerar como sucesso
-                        
-                except Exception as e:
-                    error_str = str(e).lower()
-                    if any(phrase in error_str for phrase in ['not found', '404', 'does not exist']):
-                        results['deleted'] += 1
-                        logger.info(f"ℹ️ Role '{role_name}' já foi removida")
-                    else:
-                        logger.error(f"Erro ao deletar role '{role_name}': {e}")
-                        raise
-            
-            if roles_to_delete:
-                logger.info(f"🗑️ Iniciando exclusão de {len(roles_to_delete)} roles...")
-                self._process_in_batches(
-                    items=roles_to_delete,
-                    process_func=delete_role,
-                    operation_name="exclusão de roles",
-                    results=results,
-                    progress_callback=progress_callback
-                )
-            
-        except Exception as e:
-            logger.error(f"Erro geral na sincronização de roles: {e}")
-            results['errors'].append(str(e))
-        
-        logger.info(f"🔐 Sincronização de roles concluída: {results}")
-        return results
-    
-    def sync_users_to_slave(self, slave_api: KommoAPIService, master_config: Dict, 
-                           mappings: Dict, progress_callback: Optional[Callable] = None) -> Dict:
-        """Sincroniza usuários da conta mestre para uma conta escrava"""
-        logger.info("👥 Iniciando sincronização de usuários...")
-        results = {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []}
-        
-        # Reset da flag de parada
-        self._stop_sync = False
-        
-        try:
-            # Obter usuários existentes na conta escrava
-            existing_users = {u['email']: u for u in slave_api.get_users() if u.get('email')}
-            master_user_emails = {user['email'] for user in master_config['users'] if user.get('email')}
-            
-            logger.info(f"📋 Usuários existentes na slave: {list(existing_users.keys())}")
-            logger.info(f"📋 Usuários da master: {list(master_user_emails)}")
-            
-            # FASE 1: Atualizar usuários existentes (não criar novos usuários)
-            def process_user(master_user, results):
-                user_email = master_user.get('email')
-                user_name = master_user['name']
-                
-                if not user_email:
-                    logger.warning(f"Usuário '{user_name}' não tem email - pulando")
-                    results['skipped'] += 1
-                    return
-                
-                logger.info(f"🔄 Processando usuário: {user_name} ({user_email})")
-                
-                try:
-                    if user_email in existing_users:
-                        # Usuário já existe - verificar se precisa atualizar role
-                        existing_user = existing_users[user_email]
-                        slave_user_id = existing_user['id']
-                        
-                        needs_update = False
-                        update_data = {}
-                        
-                        # Mapear role_id da master para slave
-                        master_role_id = master_user.get('role_id')
-                        if master_role_id and master_role_id in mappings.get('roles', {}):
-                            slave_role_id = mappings['roles'][master_role_id]
-                            
-                            if existing_user.get('role_id') != slave_role_id:
-                                update_data['role_id'] = slave_role_id
-                                needs_update = True
-                                logger.info(f"Role do usuário '{user_name}' será atualizada: {existing_user.get('role_id')} -> {slave_role_id}")
-                        
-                        # Verificar outros campos
-                        if existing_user.get('name') != master_user['name']:
-                            update_data['name'] = master_user['name']
-                            needs_update = True
-                        
-                        if existing_user.get('language') != master_user.get('language', 'pt'):
-                            update_data['language'] = master_user.get('language', 'pt')
-                            needs_update = True
-                        
-                        if needs_update:
-                            logger.info(f"🔄 Atualizando usuário '{user_name}' (ID: {slave_user_id})")
-                            slave_api.update_user(slave_user_id, update_data)
-                            results['updated'] += 1
-                        else:
-                            logger.info(f"✅ Usuário '{user_name}' já está sincronizado")
-                            results['skipped'] += 1
-                    else:
-                        # Usuário não existe - apenas log, não criar
-                        logger.info(f"ℹ️ Usuário '{user_name}' não existe na slave - não será criado automaticamente")
-                        results['skipped'] += 1
-                    
-                except Exception as e:
-                    logger.error(f"Erro ao processar usuário '{user_name}': {e}")
-                    raise
-            
-            # Processar usuários em lotes
-            self._process_in_batches(
-                items=master_config['users'],
-                process_func=process_user,
-                operation_name="usuários",
-                results=results,
-                progress_callback=progress_callback
-            )
-            
-        except Exception as e:
-            logger.error(f"Erro geral na sincronização de usuários: {e}")
-            results['errors'].append(str(e))
-        
-        logger.info(f"👥 Sincronização de usuários concluída: {results}")
-        return results
-    
-    def sync_custom_fields_to_slave(self, slave_api: KommoAPIService, master_config: Dict, 
+
+    def sync_custom_fields_to_slave(self, slave_api: KommoAPIService, master_config: Dict,
                                    mappings: Dict, progress_callback: Optional[Callable] = None,
                                    sync_group_id: Optional[int] = None, 
                                    slave_account_id: Optional[int] = None) -> Dict:
@@ -2559,14 +2028,9 @@ class KommoSyncService:
                 if sync_group_id and slave_account_id:
                     try:
                         self._save_mappings_to_database(mappings, sync_group_id, slave_account_id)
-                        logger.info("💾 Mapeamentos salvos no banco antes da sincronização de roles")
+                        logger.info("💾 Mapeamentos salvos no banco")
                     except Exception as mapping_error:
-                        logger.warning(f"⚠️ Erro ao salvar mapeamentos antes das roles: {mapping_error}")
-                
-                roles_results = self.sync_roles_to_slave(slave_api, master_config, mappings, progress_callback)
-                total_results['roles'] = roles_results
-                logger.info(f"Roles: {roles_results['created']} criadas, {roles_results['updated']} atualizadas, "
-                           f"{roles_results['skipped']} ignoradas, {roles_results['deleted']} deletadas")
+                        logger.warning(f"⚠️ Erro ao salvar mapeamentos: {mapping_error}")
             
             # Calcular totais
             total_created = sum(results['created'] for results in total_results.values())
@@ -2598,4 +2062,694 @@ class KommoSyncService:
             total_results['general_error'] = str(e)
         
         return total_results
+
+    def sync_roles_to_slave(self, slave_api: KommoAPIService, master_config: Dict,
+                           mappings: Dict, progress_callback: Optional[Callable] = None) -> Dict:
+        """
+        🔐 Sincroniza roles da conta mestre para uma conta escrava
+        
+        Args:
+            slave_api: API da conta escrava
+            master_config: Configuração extraída da master (deve conter 'roles')
+            mappings: Mapeamentos de IDs entre master e slave (pipelines, stages)
+            progress_callback: Callback para atualização de progresso
+            
+        Returns:
+            Dict com resultados da sincronização: {'created': X, 'updated': X, 'skipped': X, 'deleted': X, 'errors': []}
+        """
+        logger.info("🔐 Iniciando sincronização de roles...")
+        results = {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []}
+        
+        try:
+            # Extrair roles da configuração master
+            master_roles = master_config.get('roles', [])
+            
+            if not master_roles:
+                logger.warning("⚠️ Nenhuma role encontrada na configuração da master")
+                return results
+            
+            logger.info(f"📋 Encontradas {len(master_roles)} roles na master")
+            
+            # Obter roles existentes na slave
+            try:
+                slave_roles = slave_api.get_roles()
+                existing_roles_by_name = {role['name']: role for role in slave_roles}
+                logger.info(f"📋 Encontradas {len(slave_roles)} roles na slave")
+            except Exception as e:
+                logger.error(f"❌ Erro ao obter roles da slave: {e}")
+                results['errors'].append(f"Erro ao obter roles da slave: {e}")
+                return results
+            
+            # Conjunto de nomes das roles da master para comparação
+            master_role_names = {role['name'] for role in master_roles}
+            
+            # Obter mapeamentos de pipelines e stages
+            pipeline_mappings = mappings.get('pipelines', {})
+            stage_mappings = mappings.get('stages', {})
+            
+            logger.info(f"🎯 Mapeamentos disponíveis: {len(pipeline_mappings)} pipelines, {len(stage_mappings)} stages")
+            
+            # Processar roles da master
+            for i, master_role in enumerate(master_roles):
+                role_name = master_role['name']
+                
+                try:
+                    # Callback de progresso
+                    if progress_callback:
+                        progress = {
+                            'operation': 'sync_roles',
+                            'processed': i + 1,
+                            'total': len(master_roles),
+                            'percentage': round(((i + 1) / len(master_roles)) * 100, 1),
+                            'current_role': role_name
+                        }
+                        progress_callback(progress)
+                    
+                    logger.info(f"🔐 Processando role ({i+1}/{len(master_roles)}): '{role_name}'")
+                    
+                    if role_name in existing_roles_by_name:
+                        # Role já existe - verificar se precisa atualizar
+                        existing_role = existing_roles_by_name[role_name]
+                        
+                        # Por enquanto, apenas marcar como ignorada
+                        # No futuro, implementar comparação de permissões
+                        logger.info(f"✅ Role '{role_name}' já existe (ID: {existing_role['id']}) - ignorando")
+                        results['skipped'] += 1
+                        
+                    else:
+                        # Role não existe - criar nova
+                        logger.info(f"🆕 Criando role '{role_name}'")
+                        
+                        # Preparar dados da role com mapeamento de IDs
+                        role_data = {
+                            'name': master_role['name'],
+                            'rights': self._map_role_rights(master_role.get('rights', {}), pipeline_mappings, stage_mappings, slave_api)
+                        }
+                        
+                        logger.debug(f"Role data preparada: {role_data['name']} com {len(role_data['rights'])} direitos")
+                        
+                        # Chamar API para criar a role
+                        try:
+                            created_role = slave_api.create_role(role_data)
+                            logger.info(f"✅ Role '{role_name}' criada com ID: {created_role.get('id', 'N/A')}")
+                            results['created'] += 1
+                            
+                        except Exception as e:
+                            logger.error(f"❌ Erro ao criar role '{role_name}': {e}")
+                            results['errors'].append(f"Erro ao criar role '{role_name}': {e}")
+                            
+                except Exception as e:
+                    logger.error(f"❌ Erro ao processar role '{role_name}': {e}")
+                    results['errors'].append(f"Erro ao processar role '{role_name}': {e}")
+            
+            # Verificar roles da slave que não existem na master (para possível exclusão)
+            roles_to_delete = []
+            for slave_role_name, slave_role in existing_roles_by_name.items():
+                if slave_role_name not in master_role_names:
+                    # Por enquanto, apenas logar - não deletar automaticamente
+                    logger.info(f"ℹ️ Role '{slave_role_name}' existe na slave mas não na master (não será excluída automaticamente)")
+                    # roles_to_delete.append(slave_role)  # Descomentado quando quiser ativar exclusão
+            
+            # Se ativada a exclusão automática de roles:
+            # for role_to_delete in roles_to_delete:
+            #     try:
+            #         slave_api.delete_role(role_to_delete['id'])
+            #         results['deleted'] += 1
+            #     except Exception as e:
+            #         results['errors'].append(f"Erro ao deletar role '{role_to_delete['name']}': {e}")
+            
+            logger.info(f"🔐 Sincronização de roles concluída: {results}")
+            
+        except Exception as e:
+            logger.error(f"❌ Erro geral na sincronização de roles: {e}")
+            results['errors'].append(f"Erro geral: {e}")
+        
+        return results
+    
+    def _map_role_rights(self, master_rights: Dict, pipeline_mappings: Dict, stage_mappings: Dict, slave_api=None) -> Dict:
+        """
+        Mapeia os direitos/permissões de uma role da master para a slave usando os mapeamentos de IDs
+        
+        Args:
+            master_rights: Direitos originais da role na master
+            pipeline_mappings: Mapeamento master_pipeline_id -> slave_pipeline_id
+            stage_mappings: Mapeamento master_stage_id -> slave_stage_id
+            slave_api: Instância da API slave para buscar estágios das pipelines
+            
+        Returns:
+            Dict com direitos mapeados para IDs da slave
+        """
+        if not master_rights:
+            return {}
+            
+        mapped_rights = {}
+        
+        try:
+            # Processar cada tipo de direito
+            for right_type, right_value in master_rights.items():
+                
+                if right_type == 'status_rights' and isinstance(right_value, list):
+                    # Mapear status_rights que contêm pipeline_ids e status_ids
+                    mapped_status_rights = []
+                    skipped_count = 0
+                    
+                    # Agrupar status_rights por pipeline_id para análise completa
+                    rights_by_pipeline = {}
+                    for status_right in right_value:
+                        if isinstance(status_right, dict) and 'pipeline_id' in status_right:
+                            pipeline_id = int(status_right['pipeline_id'])
+                            if pipeline_id not in rights_by_pipeline:
+                                rights_by_pipeline[pipeline_id] = []
+                            rights_by_pipeline[pipeline_id].append(status_right)
+                    
+                    logger.info(f"🎯 Processando status_rights para {len(rights_by_pipeline)} pipelines")
+                    
+                    # Processar cada pipeline
+                    for master_pipeline_id, pipeline_rights in rights_by_pipeline.items():
+                        if master_pipeline_id in pipeline_mappings:
+                            slave_pipeline_id = pipeline_mappings[master_pipeline_id]
+                            logger.info(f"📊 Pipeline {master_pipeline_id} -> {slave_pipeline_id}: {len(pipeline_rights)} status_rights")
+                            
+                            # Coletar todos os status_ids da master para esta pipeline
+                            master_status_ids = set()
+                            for right in pipeline_rights:
+                                if 'status_id' in right:
+                                    master_status_ids.add(int(right['status_id']))
+                            
+                            logger.info(f"   📋 Status IDs na master: {sorted(master_status_ids)}")
+                            
+                            # Mapear apenas os status_rights que existem na master
+                            # Não criar status_rights para todos os estágios, apenas mapear os existentes
+                            for status_right in pipeline_rights:
+                                import copy
+                                mapped_status_right = copy.deepcopy(status_right)
+                                mapped_status_right['pipeline_id'] = slave_pipeline_id
+                                
+                                # Mapear o status_id se possível
+                                master_status_id = int(status_right['status_id'])
+                                if master_status_id in stage_mappings:
+                                    slave_status_id = stage_mappings[master_status_id]
+                                    mapped_status_right['status_id'] = slave_status_id
+                                    mapped_status_rights.append(mapped_status_right)
+                                    logger.debug(f"   🎭 Mapeado status_right: {master_status_id} -> {slave_status_id}")
+                                elif master_status_id in [142, 143, 1]:  # Status especiais do sistema
+                                    mapped_status_right['status_id'] = master_status_id
+                                    mapped_status_rights.append(mapped_status_right)
+                                    logger.debug(f"   🔄 Mantido status especial: {master_status_id}")
+                                else:
+                                    # Se não há mapeamento direto, verificar se é etapa de incoming lead na master
+                                    # e buscar etapa equivalente na slave
+                                    if slave_api:
+                                        try:
+                                            # Buscar informações da etapa na master
+                                            master_pipeline_stages = None
+                                            for p_id, p_rights in rights_by_pipeline.items():
+                                                if p_id == master_pipeline_id:
+                                                    # Buscar stages da pipeline master usando a API master (self)
+                                                    try:
+                                                        master_pipeline_stages = self.get_pipeline_stages(master_pipeline_id)
+                                                        break
+                                                    except:
+                                                        pass
+                                            
+                                            if master_pipeline_stages:
+                                                master_stage = next((s for s in master_pipeline_stages if s['id'] == master_status_id), None)
+                                                if master_stage:
+                                                    stage_name = master_stage['name']
+                                                    is_incoming_lead = any(keyword in stage_name.lower() for keyword in ['lead', 'entrada', 'incoming', 'novo'])
+                                                    
+                                                    if is_incoming_lead:
+                                                        # Buscar etapa equivalente na slave
+                                                        slave_stages = slave_api.get_pipeline_stages(slave_pipeline_id)
+                                                        slave_incoming_stage = None
+                                                        
+                                                        # Primeiro tentar por nome exato
+                                                        slave_incoming_stage = next((s for s in slave_stages if s['name'] == stage_name), None)
+                                                        
+                                                        # Se não encontrar, procurar qualquer incoming lead na mesma posição/sort
+                                                        if not slave_incoming_stage:
+                                                            master_sort = master_stage.get('sort', 0)
+                                                            slave_incoming_stage = next((s for s in slave_stages 
+                                                                                       if s.get('sort', 0) == master_sort and 
+                                                                                       any(keyword in s['name'].lower() for keyword in ['lead', 'entrada', 'incoming', 'novo'])), None)
+                                                        
+                                                        # Se ainda não encontrar, pegar a primeira incoming lead
+                                                        if not slave_incoming_stage:
+                                                            slave_incoming_stage = next((s for s in slave_stages 
+                                                                                       if any(keyword in s['name'].lower() for keyword in ['lead', 'entrada', 'incoming', 'novo'])), None)
+                                                        
+                                                        if slave_incoming_stage:
+                                                            mapped_status_right['status_id'] = slave_incoming_stage['id']
+                                                            mapped_status_rights.append(mapped_status_right)
+                                                            logger.info(f"   🎪 Mapeado incoming lead: {stage_name} ({master_status_id}) -> {slave_incoming_stage['name']} ({slave_incoming_stage['id']})")
+                                                        else:
+                                                            logger.warning(f"   ⚠️ Incoming lead '{stage_name}' não encontrado na slave pipeline {slave_pipeline_id}")
+                                                    else:
+                                                        logger.debug(f"   ⚠️ Status {master_status_id} ('{stage_name}') não mapeado - não é incoming lead")
+                                        except Exception as e:
+                                            logger.debug(f"   ⚠️ Erro ao mapear status {master_status_id}: {e}")
+                                    else:
+                                        logger.debug(f"   ⚠️ Status {master_status_id} não mapeado - sem API slave para busca automática")
+                            
+                            logger.info(f"   📈 Mapeados {len([sr for sr in pipeline_rights if int(sr['status_id']) in stage_mappings or int(sr['status_id']) in [142, 143, 1]])} de {len(pipeline_rights)} status_rights para pipeline {slave_pipeline_id}")
+                        else:
+                            logger.warning(f"⚠️ Pipeline {master_pipeline_id} não encontrado nos mapeamentos - {len(pipeline_rights)} direitos ignorados")
+                            skipped_count += len(pipeline_rights)
+                    
+                    mapped_rights[right_type] = mapped_status_rights
+                    
+                    total_original = len(right_value)
+                    total_mapped = len(mapped_status_rights)
+                    logger.info(f"🎯 Status rights: {total_mapped} criados baseados em {total_original} originais ({skipped_count} ignorados)")
+                    
+                    # === CRIAR PERMISSÕES BÁSICAS PARA INCOMING LEADS ===
+                    logger.info("🎪 Criando permissões básicas para etapas de incoming leads...")
+                    
+                    # Buscar todas as etapas de incoming leads mapeadas
+                    incoming_leads_statuses = set()
+                    
+                    for status_right in mapped_status_rights:
+                        status_id = status_right.get('status_id')
+                        pipeline_id = status_right.get('pipeline_id')
+                        
+                        # Verificar se é etapa de incoming lead usando slave_api
+                        if slave_api and status_id and pipeline_id:
+                            try:
+                                stages = slave_api.get_pipeline_stages(pipeline_id)
+                                for stage in stages:
+                                    if (stage['id'] == status_id and 
+                                        any(keyword in stage['name'].lower() for keyword in ['lead', 'entrada', 'incoming', 'novo'])):
+                                        incoming_leads_statuses.add(status_id)
+                                        logger.info(f"   🎪 Etapa de lead detectada: {stage['name']} (ID: {status_id})")
+                                        break
+                            except Exception as e:
+                                logger.debug(f"   ⚠️ Erro ao verificar etapa {status_id}: {e}")
+                    
+                    # Adicionar permissões básicas para cada etapa de incoming lead
+                    if incoming_leads_statuses:
+                        logger.info(f"📝 Adicionando permissões básicas para {len(incoming_leads_statuses)} etapas de incoming leads")
+                        
+                        for status_id in incoming_leads_statuses:
+                            # Criar permissões básicas com o padrão do Kommo
+                            status_key = f"status_{status_id}"
+                            
+                            # Verificar se já existe essa permissão
+                            if status_key not in mapped_rights:
+                                mapped_rights[status_key] = {
+                                    "view": True,
+                                    "edit": True,
+                                    "delete": True,
+                                    "export": True
+                                }
+                                logger.info(f"   ✅ Permissão básica criada: {status_key}")
+                            else:
+                                logger.debug(f"   ℹ️ Permissão básica já existe: {status_key}")
+                    else:
+                        logger.info("   ℹ️ Nenhuma etapa de incoming lead encontrada")
+                    
+                else:
+                    # Para outros tipos de direitos, copiar sem alteração
+                    mapped_rights[right_type] = right_value
+                    logger.debug(f"📋 Copiando direito '{right_type}' sem alteração")
+            
+            logger.info(f"✅ Mapeamento de direitos concluído: {len(mapped_rights)} tipos processados")
+            
+        except Exception as e:
+            logger.error(f"❌ Erro ao mapear direitos da role: {e}")
+            import traceback
+            traceback.print_exc()
+            # Em caso de erro, retornar direitos básicos sem status_rights para evitar falha total
+            mapped_rights = {k: v for k, v in master_rights.items() if k != 'status_rights'}
+            logger.warning("⚠️ Removendo status_rights devido a erro no mapeamento")
+        
+        return mapped_rights
+
+    def sync_roles_to_slave_new(self, master_account_id: int, slave_account_id: int, 
+                                sync_group_id: int, progress_callback: Optional[Callable] = None) -> Dict:
+        """
+        🔐 NOVA SINCRONIZAÇÃO DE ROLES
+        
+        Sincroniza roles da conta master para slave, criando primeiro os mapeamentos
+        de pipelines e status necessários.
+        
+        Args:
+            master_account_id: ID da conta master no banco local
+            slave_account_id: ID da conta slave no banco local  
+            sync_group_id: ID do grupo de sincronização
+            progress_callback: Callback para atualização de progresso
+            
+        Returns:
+            Dict com resultados da sincronização
+        """
+        logger.info("🔐 Iniciando NOVA sincronização de roles...")
+        results = {
+            'pipelines_mapped': 0,
+            'stages_mapped': 0,
+            'roles_created': 0,
+            'roles_updated': 0,
+            'roles_skipped': 0,
+            'errors': [],
+            'warnings': []
+        }
+        
+        try:
+            # === FASE 1: OBTER DADOS DAS CONTAS DO BANCO LOCAL ===
+            logger.info("📊 Obtendo dados das contas do banco local...")
+            
+            from src.models.kommo_account import KommoAccount
+            
+            master_account = KommoAccount.query.get(master_account_id)
+            slave_account = KommoAccount.query.get(slave_account_id)
+            
+            if not master_account:
+                error_msg = f"Conta master ID {master_account_id} não encontrada"
+                logger.error(error_msg)
+                results['errors'].append(error_msg)
+                return results
+                
+            if not slave_account:
+                error_msg = f"Conta slave ID {slave_account_id} não encontrada"
+                logger.error(error_msg)
+                results['errors'].append(error_msg)
+                return results
+            
+            logger.info(f"Master: {master_account.subdomain}")
+            logger.info(f"Slave: {slave_account.subdomain}")
+            
+            # === FASE 2: CRIAR INSTÂNCIAS DAS APIs ===
+            logger.info("🔗 Conectando às APIs das contas...")
+            
+            master_api = KommoAPIService(master_account.subdomain, master_account.access_token)
+            slave_api = KommoAPIService(slave_account.subdomain, slave_account.access_token)
+            
+            # === FASE 3: MAPEAR PIPELINES ===
+            logger.info("📊 Mapeando pipelines master → slave...")
+            
+            if progress_callback:
+                progress_callback({'operation': 'Mapeando pipelines', 'percentage': 10})
+            
+            try:
+                master_pipelines = master_api.get_pipelines()
+                slave_pipelines = slave_api.get_pipelines()
+                
+                logger.info(f"Master tem {len(master_pipelines)} pipelines")
+                logger.info(f"Slave tem {len(slave_pipelines)} pipelines")
+                
+                # Mapear pipelines por nome
+                pipeline_mappings = {}
+                for master_pipeline in master_pipelines:
+                    master_name = master_pipeline['name']
+                    master_id = master_pipeline['id']
+                    
+                    # Procurar pipeline correspondente na slave
+                    slave_pipeline = next((p for p in slave_pipelines if p['name'] == master_name), None)
+                    
+                    if slave_pipeline:
+                        slave_id = slave_pipeline['id']
+                        pipeline_mappings[master_id] = slave_id
+                        logger.info(f"Pipeline mapeado: '{master_name}' {master_id} → {slave_id}")
+                        
+                        # Salvar no banco
+                        self._save_pipeline_mapping(master_id, slave_id, sync_group_id)
+                        results['pipelines_mapped'] += 1
+                    else:
+                        warning = f"Pipeline '{master_name}' não encontrado na slave"
+                        logger.warning(warning)
+                        results['warnings'].append(warning)
+                
+                logger.info(f"✅ {len(pipeline_mappings)} pipelines mapeados")
+                
+            except Exception as e:
+                error_msg = f"Erro ao mapear pipelines: {e}"
+                logger.error(error_msg)
+                results['errors'].append(error_msg)
+                return results
+            
+            # === FASE 4: MAPEAR STAGES/STATUS ===
+            logger.info("🎭 Mapeando stages/status master → slave...")
+            
+            if progress_callback:
+                progress_callback({'operation': 'Mapeando stages', 'percentage': 30})
+            
+            stage_mappings = {}
+            
+            try:
+                for master_pipeline_id, slave_pipeline_id in pipeline_mappings.items():
+                    logger.info(f"Mapeando stages do pipeline {master_pipeline_id} → {slave_pipeline_id}")
+                    
+                    master_stages = master_api.get_pipeline_stages(master_pipeline_id)
+                    slave_stages = slave_api.get_pipeline_stages(slave_pipeline_id)
+                    
+                    # Mapear stages por nome
+                    for master_stage in master_stages:
+                        master_stage_name = master_stage['name']
+                        master_stage_id = master_stage['id']
+                        
+                        # Procurar stage correspondente na slave
+                        slave_stage = next((s for s in slave_stages if s['name'] == master_stage_name), None)
+                        
+                        if slave_stage:
+                            slave_stage_id = slave_stage['id']
+                            stage_mappings[master_stage_id] = slave_stage_id
+                            logger.info(f"Stage mapeado: '{master_stage_name}' {master_stage_id} → {slave_stage_id}")
+                            
+                            # Salvar no banco
+                            self._save_stage_mapping(master_stage_id, slave_stage_id, sync_group_id)
+                            results['stages_mapped'] += 1
+                        else:
+                            warning = f"Stage '{master_stage_name}' não encontrado na slave"
+                            logger.warning(warning)
+                            results['warnings'].append(warning)
+                
+                logger.info(f"✅ {len(stage_mappings)} stages mapeados")
+                
+            except Exception as e:
+                error_msg = f"Erro ao mapear stages: {e}"
+                logger.error(error_msg)
+                results['errors'].append(error_msg)
+                return results
+            
+            # === FASE 5: SINCRONIZAR ROLES ===
+            logger.info("🔐 Sincronizando roles master → slave...")
+            
+            if progress_callback:
+                progress_callback({'operation': 'Sincronizando roles', 'percentage': 60})
+            
+            try:
+                master_roles = master_api.get_roles()
+                slave_roles = slave_api.get_roles()
+                
+                logger.info(f"Master tem {len(master_roles)} roles")
+                logger.info(f"Slave tem {len(slave_roles)} roles")
+                
+                # Indexar roles da slave por nome
+                slave_roles_by_name = {role['name']: role for role in slave_roles}
+                
+                # Processar cada role da master
+                for role_index, master_role in enumerate(master_roles, 1):
+                    role_name = master_role['name']
+                    logger.info(f"[{role_index}/{len(master_roles)}] Processando role: '{role_name}'")
+                    
+                    if progress_callback:
+                        progress_callback({
+                            'operation': f'Processando role {role_name}',
+                            'percentage': 60 + (role_index / len(master_roles)) * 30
+                        })
+                    
+                    try:
+                        # Preparar dados da role
+                        role_data = self._prepare_role_data(master_role, pipeline_mappings, stage_mappings)
+                        
+                        if role_name in slave_roles_by_name:
+                            # Atualizar role existente
+                            slave_role = slave_roles_by_name[role_name]
+                            slave_role_id = slave_role['id']
+                            
+                            logger.info(f"Atualizando role existente: '{role_name}' (ID: {slave_role_id})")
+                            updated_role = slave_api.update_role(slave_role_id, role_data)
+                            
+                            if updated_role:
+                                results['roles_updated'] += 1
+                                logger.info(f"✅ Role '{role_name}' atualizada com sucesso")
+                            else:
+                                error = f"Falha ao atualizar role '{role_name}'"
+                                logger.error(error)
+                                results['errors'].append(error)
+                        else:
+                            # Criar nova role
+                            logger.info(f"Criando nova role: '{role_name}'")
+                            new_role = slave_api.create_role(role_data)
+                            
+                            if new_role:
+                                results['roles_created'] += 1
+                                logger.info(f"✅ Role '{role_name}' criada com sucesso")
+                            else:
+                                error = f"Falha ao criar role '{role_name}'"
+                                logger.error(error)
+                                results['errors'].append(error)
+                                
+                    except Exception as role_error:
+                        error = f"Erro ao processar role '{role_name}': {role_error}"
+                        logger.error(error)
+                        results['errors'].append(error)
+                        continue
+                
+            except Exception as e:
+                error_msg = f"Erro ao sincronizar roles: {e}"
+                logger.error(error_msg)
+                results['errors'].append(error_msg)
+                return results
+            
+            # === FASE 6: FINALIZAÇÃO ===
+            if progress_callback:
+                progress_callback({'operation': 'Finalizando', 'percentage': 100})
+            
+            logger.info("🎉 Sincronização de roles concluída!")
+            logger.info(f"📊 Resultados:")
+            logger.info(f"   Pipelines mapeados: {results['pipelines_mapped']}")
+            logger.info(f"   Stages mapeados: {results['stages_mapped']}")
+            logger.info(f"   Roles criadas: {results['roles_created']}")
+            logger.info(f"   Roles atualizadas: {results['roles_updated']}")
+            logger.info(f"   Avisos: {len(results['warnings'])}")
+            logger.info(f"   Erros: {len(results['errors'])}")
+            
+            return results
+            
+        except Exception as e:
+            error_msg = f"Erro geral na sincronização de roles: {e}"
+            logger.error(error_msg)
+            results['errors'].append(error_msg)
+            return results
+    
+    def _prepare_role_data(self, master_role: Dict, pipeline_mappings: Dict, stage_mappings: Dict) -> Dict:
+        """Prepara dados da role para envio à slave, mapeando IDs"""
+        role_name = master_role['name']
+        logger.info(f"Preparando dados para role: '{role_name}'")
+        
+        role_data = {
+            'name': master_role['name'],
+            'rights': {}
+        }
+        
+        master_rights = master_role.get('rights', {})
+        
+        # Copiar direitos básicos
+        for entity in ['leads', 'contacts', 'companies', 'tasks']:
+            if entity in master_rights:
+                role_data['rights'][entity] = master_rights[entity].copy()
+        
+        # Copiar direitos de acesso
+        access_rights = ['mail_access', 'catalog_access', 'files_access']
+        for access_right in access_rights:
+            role_data['rights'][access_right] = master_rights.get(access_right, False)
+        
+        # Mapear status_rights (CRÍTICO)
+        if master_rights.get('status_rights'):
+            logger.info(f"Mapeando {len(master_rights['status_rights'])} status_rights...")
+            
+            mapped_status_rights = []
+            successful_mappings = 0
+            failed_mappings = 0
+            
+            for sr in master_rights['status_rights']:
+                master_pipeline_id = sr.get('pipeline_id')
+                master_status_id = sr.get('status_id')
+                entity_type = sr.get('entity_type', 'leads')
+                rights = sr.get('rights', {})
+                
+                # Mapear pipeline_id
+                slave_pipeline_id = pipeline_mappings.get(master_pipeline_id)
+                if not slave_pipeline_id:
+                    logger.warning(f"Pipeline {master_pipeline_id} não encontrado nos mapeamentos")
+                    failed_mappings += 1
+                    continue
+                
+                # Mapear status_id
+                slave_status_id = stage_mappings.get(master_status_id)
+                if not slave_status_id:
+                    logger.warning(f"Status {master_status_id} não encontrado nos mapeamentos")
+                    failed_mappings += 1
+                    continue
+                
+                # Criar status_right mapeado
+                mapped_status_right = {
+                    'entity_type': entity_type,
+                    'pipeline_id': slave_pipeline_id,
+                    'status_id': slave_status_id,
+                    'rights': rights
+                }
+                
+                mapped_status_rights.append(mapped_status_right)
+                successful_mappings += 1
+                
+                logger.debug(f"Mapeado: pipeline {master_pipeline_id}→{slave_pipeline_id}, status {master_status_id}→{slave_status_id}")
+            
+            logger.info(f"Status rights: {successful_mappings}/{len(master_rights['status_rights'])} mapeados")
+            
+            if failed_mappings > 0:
+                logger.warning(f"{failed_mappings} status_rights falharam no mapeamento")
+            
+            role_data['rights']['status_rights'] = mapped_status_rights
+        else:
+            role_data['rights']['status_rights'] = []
+        
+        return role_data
+    
+    def _save_pipeline_mapping(self, master_id: int, slave_id: int, sync_group_id: int):
+        """Salva mapeamento de pipeline no banco"""
+        try:
+            # Verificar se já existe
+            existing = PipelineMapping.query.filter_by(
+                master_id=master_id,
+                sync_group_id=sync_group_id
+            ).first()
+            
+            if existing:
+                # Atualizar
+                existing.slave_id = slave_id
+                logger.debug(f"Atualizando mapeamento pipeline: {master_id} → {slave_id}")
+            else:
+                # Criar novo
+                mapping = PipelineMapping(
+                    master_id=master_id,
+                    slave_id=slave_id,
+                    sync_group_id=sync_group_id
+                )
+                db.session.add(mapping)
+                logger.debug(f"Criando mapeamento pipeline: {master_id} → {slave_id}")
+            
+            db.session.commit()
+            
+        except Exception as e:
+            logger.error(f"Erro ao salvar mapeamento pipeline: {e}")
+            db.session.rollback()
+    
+    def _save_stage_mapping(self, master_id: int, slave_id: int, sync_group_id: int):
+        """Salva mapeamento de stage no banco"""
+        try:
+            # Verificar se já existe
+            existing = StageMapping.query.filter_by(
+                master_id=master_id,
+                sync_group_id=sync_group_id
+            ).first()
+            
+            if existing:
+                # Atualizar
+                existing.slave_id = slave_id
+                logger.debug(f"Atualizando mapeamento stage: {master_id} → {slave_id}")
+            else:
+                # Criar novo
+                mapping = StageMapping(
+                    master_id=master_id,
+                    slave_id=slave_id,
+                    sync_group_id=sync_group_id
+                )
+                db.session.add(mapping)
+                logger.debug(f"Criando mapeamento stage: {master_id} → {slave_id}")
+            
+            db.session.commit()
+            
+        except Exception as e:
+            logger.error(f"Erro ao salvar mapeamento stage: {e}")
+            db.session.rollback()
 

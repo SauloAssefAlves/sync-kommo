@@ -687,6 +687,95 @@ def get_sync_status():
         logger.error(f"Erro ao obter status: {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@sync_bp.route('/database/clear-all', methods=['DELETE'])
+def clear_entire_database():
+    """🔥 APAGA TUDO DO BANCO: contas, mapeamentos, logs, grupos - RESET COMPLETO"""
+    try:
+        # Contar o que será removido
+        accounts_count = KommoAccount.query.count()
+        pipeline_mappings_count = PipelineMapping.query.count()
+        stage_mappings_count = StageMapping.query.count()
+        custom_field_mappings_count = CustomFieldMapping.query.count()
+        sync_logs_count = SyncLog.query.count()
+        
+        # Importar SyncGroup se existir
+        try:
+            from src.models.kommo_account import SyncGroup
+            sync_groups_count = SyncGroup.query.count()
+        except ImportError:
+            sync_groups_count = 0
+        
+        logger.warning("🔥 INICIANDO LIMPEZA COMPLETA DO BANCO DE DADOS!")
+        logger.warning(f"📊 Itens a serem removidos:")
+        logger.warning(f"   • {accounts_count} contas")
+        logger.warning(f"   • {pipeline_mappings_count} mapeamentos de pipeline")
+        logger.warning(f"   • {stage_mappings_count} mapeamentos de stage")
+        logger.warning(f"   • {custom_field_mappings_count} mapeamentos de campos")
+        logger.warning(f"   • {sync_logs_count} logs de sincronização")
+        logger.warning(f"   • {sync_groups_count} grupos de sincronização")
+        
+        # Limpar tudo em ordem (devido a foreign keys)
+        
+        # 1. Limpar logs (não têm foreign keys para outras tabelas)
+        SyncLog.query.delete()
+        logger.info("✅ Logs de sincronização removidos")
+        
+        # 2. Limpar mapeamentos (referenciam contas)
+        PipelineMapping.query.delete()
+        logger.info("✅ Mapeamentos de pipeline removidos")
+        
+        StageMapping.query.delete()
+        logger.info("✅ Mapeamentos de stage removidos")
+        
+        CustomFieldMapping.query.delete()
+        logger.info("✅ Mapeamentos de campos personalizados removidos")
+        
+        # 3. Limpar contas (podem referenciar grupos)
+        KommoAccount.query.delete()
+        logger.info("✅ Contas removidas")
+        
+        # 4. Limpar grupos (por último)
+        try:
+            from src.models.kommo_account import SyncGroup
+            SyncGroup.query.delete()
+            logger.info("✅ Grupos de sincronização removidos")
+        except ImportError:
+            logger.debug("⚠️ SyncGroup não disponível")
+        
+        # Commit de todas as mudanças
+        db.session.commit()
+        
+        total_removed = (accounts_count + pipeline_mappings_count + 
+                        stage_mappings_count + custom_field_mappings_count + 
+                        sync_logs_count + sync_groups_count)
+        
+        logger.warning(f"🔥 LIMPEZA COMPLETA CONCLUÍDA: {total_removed} itens removidos")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Banco de dados completamente limpo - RESET TOTAL executado',
+            'details': {
+                'accounts_removed': accounts_count,
+                'pipeline_mappings_removed': pipeline_mappings_count,
+                'stage_mappings_removed': stage_mappings_count,
+                'custom_field_mappings_removed': custom_field_mappings_count,
+                'sync_logs_removed': sync_logs_count,
+                'sync_groups_removed': sync_groups_count,
+                'total_items_removed': total_removed
+            },
+            'next_steps': [
+                'Adicionar contas novamente com POST /api/sync/accounts',
+                'Sincronizar pipelines primeiro com POST /api/sync/trigger {"sync_type": "pipelines"}',
+                'Depois sincronizar roles com POST /api/sync/roles',
+                'Banco está completamente limpo e pronto para recomeçar'
+            ]
+        })
+        
+    except Exception as e:
+        logger.error(f"❌ Erro durante limpeza completa do banco: {e}")
+        db.session.rollback()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @sync_bp.route('/accounts/clear', methods=['DELETE'])
 def clear_all_accounts():
     """Remove todas as contas do banco de dados"""
@@ -964,11 +1053,10 @@ def sync_roles_only():
         master_account_id = data.get('master_account_id')
         slave_account_ids = data.get('slave_account_ids', [])
         
-        # Se não especificar contas, buscar todas as contas ativas
+        # Se não especificar contas, buscar todas as contas
         if not master_account_id:
-            # Buscar conta master padrão (primeira conta ativa com role 'master')
+            # Buscar conta master padrão (primeira conta com role 'master')
             master_account = KommoAccount.query.filter_by(
-                is_active=True, 
                 account_role='master'
             ).first()
             if not master_account:
@@ -985,10 +1073,9 @@ def sync_roles_only():
                     'error': f'Conta master {master_account_id} não encontrada'
                 }), 404
         
-        # Se não especificar contas slave, buscar todas as contas slave ativas
+        # Se não especificar contas slave, buscar todas as contas slave
         if not slave_account_ids:
             slave_accounts = KommoAccount.query.filter_by(
-                is_active=True, 
                 account_role='slave'
             ).all()
             slave_account_ids = [acc.id for acc in slave_accounts]

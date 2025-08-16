@@ -1,0 +1,24 @@
+{
+  "test_timestamp": "2025-08-15T20:40:09.131907",
+  "group_used": {
+    "id": 1,
+    "name": "Grupo Master 1",
+    "master_account_id": 1,
+    "slave_account_id": 3
+  },
+  "results": {
+    "pipelines_mapped": 0,
+    "stages_mapped": 0,
+    "roles_created": 0,
+    "roles_updated": 0,
+    "roles_skipped": 0,
+    "errors": [
+      "Erro ao mapear pipelines: 401 Client Error: Unauthorized for url: https://evoresultdev.kommo.com/api/v4/leads/pipelines"
+    ],
+    "warnings": []
+  },
+  "mappings_created": {
+    "pipelines": 0,
+    "stages": 0
+  }
+}

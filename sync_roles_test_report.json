@@ -1,0 +1,24 @@
+{
+  "test_timestamp": "2025-08-15T20:46:54.300913",
+  "group_used": {
+    "id": 1,
+    "name": "Grupo Master 1",
+    "master_account_id": 1,
+    "slave_account_id": 3
+  },
+  "results": {
+    "pipelines_mapped": 0,
+    "stages_mapped": 0,
+    "roles_created": 0,
+    "roles_updated": 0,
+    "roles_skipped": 0,
+    "errors": [
+      "Erro geral na sincronização de roles: Working outside of application context.\n\nThis typically means that you attempted to use functionality that needed\nthe current application. To solve this, set up an application context\nwith app.app_context(). See the documentation for more information."
+    ],
+    "warnings": []
+  },
+  "mappings_created": {
+    "pipelines": 0,
+    "stages": 0
+  }
+}

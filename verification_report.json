@@ -1,0 +1,19 @@
+{
+  "verification_timestamp": "2025-08-15T20:07:03.611948",
+  "database_path": "src\\database\\app.db",
+  "statistics": {
+    "total_accounts": 3,
+    "master_accounts": 2,
+    "slave_accounts": 1,
+    "sync_groups": 2,
+    "pipeline_mappings": 0,
+    "stage_mappings": 0
+  },
+  "validations": {
+    "accounts_without_tokens": 3,
+    "inconsistent_roles": 0,
+    "invalid_group_masters": 0,
+    "orphan_slaves": 0
+  },
+  "ready_for_sync": false
+}

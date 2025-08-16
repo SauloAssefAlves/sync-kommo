@@ -1,0 +1,34 @@
+{
+  "import_timestamp": "2025-08-15T20:03:01.037181",
+  "source": "http://89.116.186.230:5000/api/sync/accounts",
+  "accounts_imported": 3,
+  "masters": 2,
+  "slaves": 1,
+  "accounts": [
+    {
+      "id": 3,
+      "subdomain": "testedev",
+      "role": "slave",
+      "token_preview": null,
+      "group_id": 1,
+      "group_name": "Grupo Master 1"
+    },
+    {
+      "id": 1,
+      "subdomain": "evoresultdev",
+      "role": "master",
+      "token_preview": null,
+      "group_id": null,
+      "group_name": null
+    },
+    {
+      "id": 2,
+      "subdomain": "test",
+      "role": "master",
+      "token_preview": null,
+      "group_id": null,
+      "group_name": null
+    }
+  ],
+  "database_path": "src\\database\\app.db"
+}
