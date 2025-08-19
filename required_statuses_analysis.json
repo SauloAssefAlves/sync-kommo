@@ -1,0 +1,21 @@
+{
+  "master": {
+    "account_name": "MASTER (teste3)",
+    "pipelines": {},
+    "stages": {},
+    "required_statuses": {},
+    "error": "402 Client Error: Payment Required for url: https://teste3.kommo.com/api/v4/leads/pipelines"
+  },
+  "slave": {
+    "account_name": "SLAVE (testesync)",
+    "pipelines": {},
+    "stages": {},
+    "required_statuses": {},
+    "error": "401 Client Error: Not Authorized for url: https://testesync.kommo.com/api/v4/leads/pipelines"
+  },
+  "comparison": {
+    "master_fields": 0,
+    "slave_fields": 0,
+    "difference": 0
+  }
+}

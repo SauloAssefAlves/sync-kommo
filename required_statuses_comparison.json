@@ -1,0 +1,23 @@
+{
+  "accounts": {
+    "master": {
+      "subdomain": "evoresultdev",
+      "id": 3
+    },
+    "slave": {
+      "subdomain": "testedev",
+      "id": 2
+    }
+  },
+  "mappings": {
+    "pipelines_count": 7,
+    "stages_count": 31,
+    "special_stages_mapped": [],
+    "special_stages_count": 0
+  },
+  "analysis": {
+    "all_special_stages_mapped": false,
+    "correction_needed": true,
+    "correction_effectiveness": "full"
+  }
+}

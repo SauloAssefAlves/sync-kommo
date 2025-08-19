@@ -583,23 +583,28 @@ class KommoSyncService:
                         if 'stages' not in mappings:
                             mappings['stages'] = {}
                         
-                        # Mapear estágios criados - APENAS os que foram realmente enviados (ignorando especiais)
-                        created_stage_index = 0
+                        # Mapear estágios criados - MAPEAR POR NOME, NÃO POR POSIÇÃO
+                        created_stages_by_name = {s['name']: s for s in created_stages}
+                        logger.info(f"🔍 Stages criados na slave: {list(created_stages_by_name.keys())}")
+                        
                         for master_stage in master_pipeline['stages']:
                             # IGNORAR COMPLETAMENTE estágios especiais no mapeamento
                             if self._should_ignore_stage(master_stage):
                                 logger.debug(f"🚫 Ignorando mapeamento do estágio especial '{master_stage['name']}' - gerenciado pelo Kommo")
                                 continue
                             
-                            # Mapear estágios normais para IDs gerados pela API
-                            if created_stage_index < len(created_stages):
-                                slave_stage_id = int(created_stages[created_stage_index]['id'])
+                            # Mapear estágios normais por NOME para garantir mapeamento correto
+                            stage_name = master_stage['name']
+                            if stage_name in created_stages_by_name:
+                                slave_stage_data = created_stages_by_name[stage_name]
+                                slave_stage_id = int(slave_stage_data['id'])
                                 master_stage_id = int(master_stage['id'])
                                 mappings['stages'][master_stage_id] = slave_stage_id
-                                logger.info(f"✅ Mapeando estágio '{master_stage['name']}' -> ID slave {slave_stage_id}")
-                                logger.info(f"🎭 MAPEAMENTO CRIADO (criação): Stage {master_stage_id} -> {slave_stage_id}")
+                                logger.info(f"✅ Mapeando estágio '{stage_name}' -> Master {master_stage_id} -> Slave {slave_stage_id}")
+                                logger.info(f"🎭 MAPEAMENTO CRIADO (criação por nome): Stage {master_stage_id} -> {slave_stage_id}")
                                 logger.debug(f"🎭 Mapeamento de stage salvo na criação: {master_stage_id} -> {slave_stage_id}")
-                                created_stage_index += 1
+                            else:
+                                logger.warning(f"⚠️ Stage '{stage_name}' da master não encontrado na slave criada!")
                     
                     # Armazenar mapeamento do pipeline - garantir que seja inteiro
                     master_pipeline_id = int(master_pipeline['id'])
@@ -1395,6 +1400,17 @@ class KommoSyncService:
                                         }
                                         mapped_required_statuses.append(mapped_status)
                                         logger.info(f"   ✅ Required_status mapeado com sucesso: pipeline {master_pipeline_id}->{slave_pipeline_id}, status {master_status_id}->{slave_status_id}")
+                                    elif master_status_id in [142, 143, 1]:  # Status especiais do sistema
+                                        # Para required_statuses, os status especiais 142, 143, 1 são mapeados para eles mesmos
+                                        # pois estes IDs são padrão do Kommo em todas as contas
+                                        logger.info(f"   🎯 Status especial detectado: {master_status_id} - mapeando para ele mesmo")
+                                        
+                                        mapped_status = {
+                                            'status_id': master_status_id,  # Mapear para ele mesmo
+                                            'pipeline_id': slave_pipeline_id
+                                        }
+                                        mapped_required_statuses.append(mapped_status)
+                                        logger.info(f"   ✅ Required_status especial mapeado: pipeline {master_pipeline_id}->{slave_pipeline_id}, status {master_status_id}->{master_status_id} (especial)")
                                     else:
                                         logger.warning(f"   ❌ Status {master_status_id} não encontrado nos mapeamentos - pulando required_status")
                                         logger.debug(f"   📋 Status disponíveis: {list(mappings.get('stages', {}).keys())[:10]}...")
