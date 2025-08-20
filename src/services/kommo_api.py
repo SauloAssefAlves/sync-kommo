@@ -76,19 +76,55 @@ class KommoAPIService:
             logger.error(f"Conteúdo da resposta: '{response.text}'")
             raise
     
-    def get_pipelines(self) -> List[Dict]:
+    def get_pipelines(self, with_descriptions: bool = False) -> List[Dict]:
         """Obtém todos os pipelines da conta"""
         response = self._make_request('GET', '/leads/pipelines')
-        return response.get('_embedded', {}).get('pipelines', [])
+        pipelines = response.get('_embedded', {}).get('pipelines', [])
+        
+        # Se solicitado, buscar descrições dos stages para cada pipeline
+        if with_descriptions:
+            logger.info(f"🔍 Buscando descrições para {len(pipelines)} pipelines...")
+            for pipeline in pipelines:
+                pipeline_id = pipeline['id']
+                pipeline_name = pipeline['name']
+                logger.debug(f"🔍 Buscando descrições para pipeline '{pipeline_name}' (ID: {pipeline_id})")
+                stages_with_descriptions = self.get_pipeline_stages(pipeline_id, with_descriptions=True)
+                # Atualizar os stages do pipeline com as descrições
+                pipeline['_embedded']['statuses'] = stages_with_descriptions
+                
+                # Log das descrições encontradas
+                for stage in stages_with_descriptions:
+                    if stage.get('descriptions'):
+                        logger.info(f"📝 Pipeline '{pipeline_name}' -> Stage '{stage['name']}' tem {len(stage['descriptions'])} descrições")
+        
+        return pipelines
     
-    def get_pipeline_stages(self, pipeline_id: int) -> List[Dict]:
+    def get_pipeline_stages(self, pipeline_id: int, with_descriptions: bool = False) -> List[Dict]:
         """Obtém todos os estágios de um pipeline específico"""
-        # Tentar obter informações sobre campos obrigatórios nos estágios
+        # Tentar obter informações sobre campos obrigatórios e descrições nos estágios
         params = {'with': 'required_fields'}
+        if with_descriptions:
+            params['with'] = 'required_fields,descriptions'
+            logger.debug(f"🔍 Buscando stages do pipeline {pipeline_id} COM DESCRIÇÕES")
+        
         response = self._make_request('GET', f'/leads/pipelines/{pipeline_id}/statuses', params=params)
         stages = response.get('_embedded', {}).get('statuses', [])
         
-        # Log para debug
+        # Log para debug das descrições
+        if with_descriptions:
+            for stage in stages:
+                stage_name = stage.get('name', 'Unknown')
+                descriptions = stage.get('descriptions', [])
+                if descriptions:
+                    logger.info(f"📝 Stage '{stage_name}' (ID: {stage.get('id')}) tem {len(descriptions)} descrições:")
+                    for desc in descriptions:
+                        level = desc.get('level', 'unknown')
+                        desc_text = desc.get('description', '')
+                        logger.info(f"   - Level '{level}': {desc_text}")
+                else:
+                    logger.debug(f"📋 Stage '{stage_name}' sem descrições")
+        
+        # Log para debug original
         logger.debug(f"Obtidos {len(stages)} estágios para pipeline {pipeline_id}")
         for stage in stages:
             if stage.get('required_fields'):
@@ -351,7 +387,10 @@ class KommoSyncService:
         }
         
         # Extrair pipelines e seus estágios
-        pipelines = self.master_api.get_pipelines()
+        logger.info("🔍 Buscando pipelines da master COM DESCRIÇÕES...")
+        pipelines = self.master_api.get_pipelines(with_descriptions=True)
+        logger.info(f"📊 Encontradas {len(pipelines)} pipelines para extração")
+        
         for pipeline in pipelines:
             pipeline_data = {
                 'id': pipeline['id'],
@@ -362,8 +401,11 @@ class KommoSyncService:
                 'stages': []
             }
             
-            # Extrair estágios do pipeline
-            stages = self.master_api.get_pipeline_stages(pipeline['id'])
+            # Extrair estágios do pipeline (com descrições)
+            logger.info(f"🔍 Buscando stages da pipeline '{pipeline['name']}' COM DESCRIÇÕES...")
+            stages = self.master_api.get_pipeline_stages(pipeline['id'], with_descriptions=True)
+            logger.info(f"📋 Encontrados {len(stages)} stages para pipeline '{pipeline['name']}'")
+            
             for i, stage in enumerate(stages):
                 # Verificar se deve usar ID padrão do Kommo
                 default_stage_id = self._get_default_stage_id(stage['name'], stage.get('type', 0))
@@ -374,6 +416,24 @@ class KommoSyncService:
                     'color': stage.get('color', '#99ccff'),  # Cor padrão se não tiver
                     'type': stage.get('type', 0)
                 }
+                
+                # Incluir descrições se existirem
+                if 'descriptions' in stage and stage['descriptions']:
+                    # As descrições vêm como array de objetos com 'level' e 'description'
+                    descriptions_list = []
+                    for desc_obj in stage['descriptions']:
+                        if 'description' in desc_obj and desc_obj['description']:
+                            level = desc_obj.get('level', 'default')
+                            description_text = desc_obj['description']
+                            descriptions_list.append({
+                                'level': level,
+                                'description': description_text
+                            })
+                            logger.debug(f"📝 Extraindo descrição para estágio '{stage['name']}' (level: {level}): {description_text[:100]}...")
+                    
+                    if descriptions_list:
+                        stage_data['descriptions'] = descriptions_list
+                        logger.info(f"📝 Stage '{stage['name']}' tem {len(descriptions_list)} descrições")
                 
                 # Preservar ID da master para mapeamento, mas usar ID padrão quando aplicável
                 stage_data['id'] = stage['id']  # ID original da master para mapeamento
@@ -550,6 +610,16 @@ class KommoSyncService:
                                 'type': master_stage.get('type', 0)
                             }
                             
+                            # Sincronizar descrições se existirem
+                            if 'descriptions' in master_stage and master_stage['descriptions']:
+                                # As descrições vêm como array de objetos
+                                stage_data['descriptions'] = master_stage['descriptions']
+                                logger.info(f"📝 Sincronizando {len(master_stage['descriptions'])} descrições para estágio '{master_stage['name']}'")
+                                for desc_obj in master_stage['descriptions']:
+                                    level = desc_obj.get('level', 'default')
+                                    desc_text = desc_obj.get('description', '')
+                                    logger.debug(f"   - Level '{level}': {desc_text[:50]}...")
+                            
                             # Usar a cor do stage da master validada (usar contador de estágios processados para fallback)
                             master_color = master_stage.get('color')
                             valid_color = get_valid_kommo_color(master_color, processed_stage_index)
@@ -706,8 +776,8 @@ class KommoSyncService:
         """Sincroniza estágios de um pipeline específico - SINCRONIZAÇÃO BIDIRECIONAL"""
         logger.info(f"Sincronizando estágios do pipeline '{master_pipeline['name']}' (slave_id: {slave_pipeline_id})")
         
-        # Obter estágios existentes na conta escrava usando o ID correto da conta escrava
-        existing_stages_list = slave_api.get_pipeline_stages(slave_pipeline_id)
+        # Obter estágios existentes na conta escrava usando o ID correto da conta escrava (com descrições)
+        existing_stages_list = slave_api.get_pipeline_stages(slave_pipeline_id, with_descriptions=True)
         existing_stages = {s['name']: s for s in existing_stages_list}
         
         # Criar conjunto dos nomes dos estágios da master para comparação
@@ -780,6 +850,15 @@ class KommoSyncService:
                     'type': stage_type
                 }
                 
+                # Sincronizar descrições se existirem
+                if 'descriptions' in master_stage and master_stage['descriptions']:
+                    stage_data['descriptions'] = master_stage['descriptions']
+                    logger.info(f"📝 Sincronizando {len(master_stage['descriptions'])} descrições para estágio '{stage_name}'")
+                    for desc_obj in master_stage['descriptions']:
+                        level = desc_obj.get('level', 'default')
+                        desc_text = desc_obj.get('description', '')
+                        logger.debug(f"   - Level '{level}': {desc_text[:50]}...")
+                
                 # Usar a cor do stage da master validada (usar contador de estágios processados para fallback)
                 master_color = master_stage.get('color')
                 valid_color = get_valid_kommo_color(master_color, processed_stage_index)
@@ -793,10 +872,102 @@ class KommoSyncService:
                 logger.info(f"🔍 Estágio '{stage_name}' existe? {stage_exists}")
                 
                 if stage_exists:
-                    # Estágio já existe - apenas armazenar mapeamento
+                    # Estágio já existe - verificar se precisa atualizar descrição
                     existing_stage = existing_stages[stage_name]
                     slave_stage_id = existing_stage['id']
                     logger.info(f"✅ Estágio '{stage_name}' já existe (slave_id: {slave_stage_id})")
+                    
+                    # Verificar se o estágio precisa ser atualizado (sort, color, descrições)
+                    master_descriptions = master_stage.get('descriptions', [])
+                    existing_descriptions = existing_stage.get('descriptions', [])
+                    master_sort = master_stage.get('sort', 0)
+                    existing_sort = existing_stage.get('sort', 0)
+                    master_color = master_stage.get('color', '')
+                    existing_color = existing_stage.get('color', '')
+                    
+                    # LOG DETALHADO para debug
+                    logger.info(f"🔍 COMPARANDO PROPRIEDADES do estágio '{stage_name}':")
+                    logger.info(f"   📊 Master tem {len(master_descriptions)} descrições, sort: {master_sort}, color: {master_color}")
+                    logger.info(f"   📊 Slave tem {len(existing_descriptions)} descrições, sort: {existing_sort}, color: {existing_color}")
+                    
+                    if master_descriptions:
+                        logger.info(f"   📝 Descrições da Master:")
+                        for i, desc in enumerate(master_descriptions):
+                            logger.info(f"      {i+1}. Level '{desc.get('level', 'unknown')}': {desc.get('description', '')}")
+                    
+                    if existing_descriptions:
+                        logger.info(f"   📝 Descrições da Slave:")
+                        for i, desc in enumerate(existing_descriptions):
+                            logger.info(f"      {i+1}. Level '{desc.get('level', 'unknown')}': {desc.get('description', '')}")
+                    
+                    # Comparar descrições (verificar se há diferenças)
+                    descriptions_different = False
+                    if len(master_descriptions) != len(existing_descriptions):
+                        descriptions_different = True
+                        logger.info(f"   🔄 DIFERENÇA: Quantidades de descrições diferentes - Master:{len(master_descriptions)} vs Slave:{len(existing_descriptions)}")
+                    else:
+                        # Comparar cada descrição
+                        for master_desc in master_descriptions:
+                            master_level = master_desc.get('level', 'default')
+                            master_text = master_desc.get('description', '')
+                            
+                            # Procurar descrição correspondente na slave
+                            existing_desc = next((ed for ed in existing_descriptions if ed.get('level') == master_level), None)
+                            
+                            if not existing_desc:
+                                descriptions_different = True
+                                logger.info(f"   🔄 DIFERENÇA: Level '{master_level}' não existe na slave")
+                                break
+                            elif existing_desc.get('description', '') != master_text:
+                                descriptions_different = True
+                                logger.info(f"   🔄 DIFERENÇA: Level '{master_level}' tem texto diferente")
+                                logger.info(f"      Master: '{master_text}'")
+                                logger.info(f"      Slave:  '{existing_desc.get('description', '')}'")
+                                break
+                    
+                    # Verificar outras propriedades
+                    sort_different = master_sort != existing_sort
+                    color_different = master_color != existing_color
+                    
+                    if sort_different:
+                        logger.info(f"   � DIFERENÇA: Sort diferente - Master: {master_sort} vs Slave: {existing_sort}")
+                    if color_different:
+                        logger.info(f"   🔄 DIFERENÇA: Color diferente - Master: {master_color} vs Slave: {existing_color}")
+                    
+                    # Determinar se precisa atualizar
+                    needs_update = descriptions_different or sort_different or color_different
+                    
+                    if needs_update:
+                        logger.info(f"🔄 Atualizando estágio '{stage_name}' - Mudanças detectadas:")
+                        update_data = {}
+                        
+                        # Adicionar descrições se diferentes
+                        if descriptions_different:
+                            update_data['descriptions'] = master_descriptions
+                            logger.info(f"   📝 Atualizando {len(master_descriptions)} descrições")
+                        
+                        # Adicionar sort se diferente  
+                        if sort_different:
+                            update_data['sort'] = master_sort
+                            logger.info(f"   🔢 Atualizando sort: {existing_sort} -> {master_sort}")
+                        
+                        # Adicionar color se diferente
+                        if color_different:
+                            update_data['color'] = master_color
+                            logger.info(f"   🎨 Atualizando color: {existing_color} -> {master_color}")
+                        
+                        try:
+                            slave_api.update_pipeline_stage(slave_pipeline_id, slave_stage_id, update_data)
+                            logger.info(f"✅ Estágio '{stage_name}' atualizado com sucesso")
+                            if descriptions_different:
+                                for desc_obj in master_descriptions:
+                                    level = desc_obj.get('level', 'default')
+                                    desc_text = desc_obj.get('description', '')
+                                    logger.debug(f"   - Level '{level}': {desc_text[:50]}...")
+                        except Exception as e:
+                            logger.warning(f"⚠️ Erro ao atualizar estágio '{stage_name}': {e}")
+                    else:
+                        logger.debug(f"📝 Estágio '{stage_name}' já está sincronizado - nenhuma mudança necessária")
                     
                     # Armazenar mapeamento sem criar novo estágio - garantir que sejam inteiros
                     if 'stages' not in mappings:
@@ -1017,6 +1188,17 @@ class KommoSyncService:
         """Carrega mapeamentos existentes do banco de dados"""
         try:
             logger.info(f"📖 Carregando mapeamentos do banco para grupo {sync_group_id}, conta {slave_account_id}")
+            logger.info(f"🔍 TIPOS DOS PARÂMETROS: sync_group_id={type(sync_group_id)}, slave_account_id={type(slave_account_id)}")
+            
+            # Teste direto da query SQL
+            from sqlalchemy import text
+            result = db.session.execute(text(
+                "SELECT id, master_pipeline_id, slave_pipeline_id FROM pipeline_mappings WHERE sync_group_id = :group AND slave_account_id = :slave"
+            ), {"group": sync_group_id, "slave": slave_account_id})
+            direct_results = result.fetchall()
+            logger.info(f"🔎 QUERY SQL DIRETA RETORNOU: {len(direct_results)} resultados")
+            for row_id, master_id, slave_id in direct_results:
+                logger.info(f"   SQL Direct: ID={row_id}, {master_id} -> {slave_id}")
             
             mappings = {'pipelines': {}, 'stages': {}, 'custom_field_groups': {}, 'roles': {}}
             
@@ -1026,6 +1208,8 @@ class KommoSyncService:
                 slave_account_id=slave_account_id
             ).all()
             
+            logger.info(f"🔍 Encontrados {len(pipeline_mappings)} pipeline mappings na query")
+            
             for mapping in pipeline_mappings:
                 # Garantir que IDs sejam inteiros
                 master_id = int(mapping.master_pipeline_id)
@@ -1033,11 +1217,22 @@ class KommoSyncService:
                 mappings['pipelines'][master_id] = slave_id
                 logger.debug(f"📊 Pipeline mapping: {master_id} -> {slave_id}")
             
+            # Log específico para pipelines problemáticos
+            problematic_pipelines = [11528627, 11528935, 11529767]
+            logger.info(f"🎯 Verificando pipelines problemáticos:")
+            for pip_id in problematic_pipelines:
+                if pip_id in mappings['pipelines']:
+                    logger.info(f"   ✅ Pipeline {pip_id} -> {mappings['pipelines'][pip_id]} (ENCONTRADO)")
+                else:
+                    logger.warning(f"   ❌ Pipeline {pip_id} NÃO ENCONTRADO nos mapeamentos!")
+            
             # Carregar mapeamentos de estágios
             stage_mappings = StageMapping.query.filter_by(
                 sync_group_id=sync_group_id,
                 slave_account_id=slave_account_id
             ).all()
+            
+            logger.info(f"🔍 Encontrados {len(stage_mappings)} stage mappings na query")
             
             for mapping in stage_mappings:
                 # Garantir que IDs sejam inteiros
@@ -2384,7 +2579,14 @@ class KommoSyncService:
                         logger.info("   ℹ️ Nenhuma etapa de incoming lead encontrada")
                     
                 else:
-                    # Para outros tipos de direitos, copiar sem alteração
+                    # Filtrar direitos que contêm IDs específicos que podem não existir na slave
+                    problematic_rights = ['catalog_rights', 'source_rights', 'pipeline_rights']
+                    
+                    if right_type in problematic_rights:
+                        logger.warning(f"🚫 Ignorando '{right_type}' - contém IDs específicos que podem não existir na slave")
+                        continue
+                    
+                    # Para outros tipos de direitos seguros, copiar sem alteração
                     mapped_rights[right_type] = right_value
                     logger.debug(f"📋 Copiando direito '{right_type}' sem alteração")
             
@@ -2394,9 +2596,10 @@ class KommoSyncService:
             logger.error(f"❌ Erro ao mapear direitos da role: {e}")
             import traceback
             traceback.print_exc()
-            # Em caso de erro, retornar direitos básicos sem status_rights para evitar falha total
-            mapped_rights = {k: v for k, v in master_rights.items() if k != 'status_rights'}
-            logger.warning("⚠️ Removendo status_rights devido a erro no mapeamento")
+            # Em caso de erro, retornar direitos básicos sem direitos problemáticos para evitar falha total
+            problematic_rights = ['status_rights', 'catalog_rights', 'source_rights', 'pipeline_rights']
+            mapped_rights = {k: v for k, v in master_rights.items() if k not in problematic_rights}
+            logger.warning("⚠️ Removendo direitos problemáticos devido a erro no mapeamento")
         
         return mapped_rights
 
@@ -2455,8 +2658,8 @@ class KommoSyncService:
             # === FASE 2: CRIAR INSTÂNCIAS DAS APIs ===
             logger.info("🔗 Conectando às APIs das contas...")
             
-            master_api = KommoAPIService(master_account.subdomain, master_account.access_token)
-            slave_api = KommoAPIService(slave_account.subdomain, slave_account.access_token)
+            master_api = KommoAPIService(master_account.subdomain, master_account.refresh_token)
+            slave_api = KommoAPIService(slave_account.subdomain, slave_account.refresh_token)
             
             # === FASE 3: MAPEAR PIPELINES ===
             logger.info("📊 Mapeando pipelines master → slave...")
@@ -2545,7 +2748,19 @@ class KommoSyncService:
                 results['errors'].append(error_msg)
                 return results
             
-            # === FASE 5: SINCRONIZAR ROLES ===
+            # === FASE 5: CARREGAR MAPEAMENTOS EXISTENTES DO BANCO ===
+            logger.info("💾 Carregando mapeamentos existentes do banco de dados...")
+            
+            # Carregar mapeamentos do banco para usar nas roles
+            database_mappings = self._load_mappings_from_database(sync_group_id, slave_account_id)
+            
+            # Mesclar mapeamentos criados em tempo real com os do banco (priorizando os do banco)
+            final_pipeline_mappings = {**pipeline_mappings, **database_mappings.get('pipelines', {})}
+            final_stage_mappings = {**stage_mappings, **database_mappings.get('stages', {})}
+            
+            logger.info(f"📊 Mapeamentos finais: {len(final_pipeline_mappings)} pipelines, {len(final_stage_mappings)} stages")
+            
+            # === FASE 6: SINCRONIZAR ROLES ===
             logger.info("🔐 Sincronizando roles master → slave...")
             
             if progress_callback:
@@ -2573,8 +2788,8 @@ class KommoSyncService:
                         })
                     
                     try:
-                        # Preparar dados da role
-                        role_data = self._prepare_role_data(master_role, pipeline_mappings, stage_mappings)
+                        # Preparar dados da role usando os mapeamentos finais (incluindo os do banco)
+                        role_data = self._prepare_role_data(master_role, final_pipeline_mappings, final_stage_mappings)
                         
                         if role_name in slave_roles_by_name:
                             # Atualizar role existente
@@ -2616,7 +2831,7 @@ class KommoSyncService:
                 results['errors'].append(error_msg)
                 return results
             
-            # === FASE 6: FINALIZAÇÃO ===
+            # === FASE 7: FINALIZAÇÃO ===
             if progress_callback:
                 progress_callback({'operation': 'Finalizando', 'percentage': 100})
             
@@ -2642,8 +2857,18 @@ class KommoSyncService:
         role_name = master_role['name']
         logger.info(f"Preparando dados para role: '{role_name}'")
         
+        # Sanitizar nome da role para evitar erro 400
+        clean_name = role_name.strip()
+        clean_name = clean_name.replace(' - ', ' ')  # Remover hífens com espaços
+        clean_name = clean_name.replace('-', ' ')    # Remover hífens simples
+        clean_name = ' '.join(clean_name.split())    # Normalizar espaços múltiplos
+        clean_name = clean_name[:50]                 # Limitar a 50 caracteres
+        
+        if clean_name != role_name:
+            logger.info(f"🔧 Nome da role sanitizado: '{role_name}' -> '{clean_name}'")
+        
         role_data = {
-            'name': master_role['name'],
+            'name': clean_name,
             'rights': {}
         }
         
@@ -2659,7 +2884,7 @@ class KommoSyncService:
         for access_right in access_rights:
             role_data['rights'][access_right] = master_rights.get(access_right, False)
         
-        # Mapear status_rights (CRÍTICO)
+        # Mapear status_rights (CRÍTICO) - com validação para evitar erro 400
         if master_rights.get('status_rights'):
             logger.info(f"Mapeando {len(master_rights['status_rights'])} status_rights...")
             
@@ -2667,11 +2892,28 @@ class KommoSyncService:
             successful_mappings = 0
             failed_mappings = 0
             
+            # Verificar se temos mapeamentos suficientes para processar status_rights
+            if not pipeline_mappings:
+                logger.warning("⚠️ Nenhum mapeamento de pipeline disponível - ignorando status_rights para evitar erro 400")
+                role_data['rights']['status_rights'] = []
+                return role_data
+            
+            if not stage_mappings:
+                logger.warning("⚠️ Nenhum mapeamento de stage disponível - ignorando status_rights para evitar erro 400")
+                role_data['rights']['status_rights'] = []
+                return role_data
+            
             for sr in master_rights['status_rights']:
                 master_pipeline_id = sr.get('pipeline_id')
                 master_status_id = sr.get('status_id')
                 entity_type = sr.get('entity_type', 'leads')
                 rights = sr.get('rights', {})
+                
+                # Validar dados obrigatórios
+                if not master_pipeline_id or not master_status_id:
+                    logger.warning(f"Status right com dados inválidos: pipeline={master_pipeline_id}, status={master_status_id}")
+                    failed_mappings += 1
+                    continue
                 
                 # Mapear pipeline_id
                 slave_pipeline_id = pipeline_mappings.get(master_pipeline_id)

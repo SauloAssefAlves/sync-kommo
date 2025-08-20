@@ -290,8 +290,12 @@ def trigger_group_sync(group_id, sync_type='full', batch_config=None):
                             account_results['custom_fields'] = custom_fields_results
                         
                         if sync_type in ['roles']:
-                            roles_results = sync_service.sync_roles_to_slave(
-                                slave_api, master_config, mappings, progress_callback
+                            # Usar a nova função que carrega mapeamentos automaticamente
+                            roles_results = sync_service.sync_roles_to_slave_new(
+                                master_account_id=master_account.id,
+                                slave_account_id=slave_account.id,
+                                sync_group_id=group.id,
+                                progress_callback=progress_callback
                             )
                             account_results['roles'] = roles_results
                     
@@ -510,8 +514,12 @@ def trigger_sync():
                             account_results['custom_fields'] = custom_fields_results
                         
                         if sync_type in ['roles']:
-                            roles_results = sync_service.sync_roles_to_slave(
-                                slave_api, master_config, mappings, progress_callback
+                            # Usar a nova função que carrega mapeamentos automaticamente
+                            roles_results = sync_service.sync_roles_to_slave_new(
+                                master_account_id=master_account.id,
+                                slave_account_id=slave_account.id,
+                                sync_group_id=slave_account.sync_group_id or 1,  # Usar o grupo da conta slave
+                                progress_callback=progress_callback
                             )
                             account_results['roles'] = roles_results
                     
@@ -1249,25 +1257,12 @@ def sync_roles_only():
                 # Sincronizar roles
                 logger.info(f"🔐 Sincronizando roles para conta {slave_account.subdomain}...")
                 
-                # CARREGAR MAPEAMENTOS ATUALIZADOS DO BANCO após sincronização de pipelines
-                logger.info(f"📖 Carregando mapeamentos atualizados do banco de dados...")
-                try:
-                    mappings = sync_service._load_mappings_from_database(
-                        slave_account.sync_group_id, 
-                        slave_account.id
-                    )
-                    logger.info(f"✅ Mapeamentos carregados: {len(mappings.get('pipelines', {}))} pipelines, {len(mappings.get('stages', {}))} stages")
-                except Exception as e:
-                    logger.warning(f"⚠️ Erro ao carregar mapeamentos: {e} - usando mapeamentos vazios")
-                    mappings = {'pipelines': {}, 'stages': {}, 'roles': {}}
-                
-                roles_results = sync_service.sync_roles_to_slave(
-                    slave_api=slave_api,
-                    master_config=master_config,
-                    mappings=mappings,
-                    progress_callback=progress_callback,
+                # Usar a nova função que carrega mapeamentos automaticamente
+                roles_results = sync_service.sync_roles_to_slave_new(
+                    master_account_id=master_account_id,
+                    slave_account_id=slave_account.id,
                     sync_group_id=slave_account.sync_group_id,
-                    slave_account_id=slave_account.id
+                    progress_callback=progress_callback
                 )
                 
                 # Registrar resultado
@@ -1436,12 +1431,12 @@ def sync_single_account(account_id):
                     logger.warning(f"⚠️ Erro ao carregar mapeamentos: {e} - usando mapeamentos vazios")
                     mappings = {'pipelines': {}, 'stages': {}, 'custom_fields': {}, 'roles': {}}
                 
-                result = sync_service.sync_roles_to_slave(
-                    slave_api, 
-                    master_config, 
-                    mappings,
+                # Usar a nova função que carrega mapeamentos automaticamente
+                result = sync_service.sync_roles_to_slave_new(
+                    master_account_id=master_account.id,
+                    slave_account_id=account.id,
                     sync_group_id=account.sync_group_id,
-                    slave_account_id=account.id
+                    progress_callback=None
                 )
             else:
                 return jsonify({'success': False, 'error': f'Tipo de sincronização inválido: {sync_type}'}), 400
