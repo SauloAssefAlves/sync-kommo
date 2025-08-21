@@ -287,6 +287,81 @@ class KommoAPIService:
         except Exception as e:
             logger.error(f"Falha no teste de conexão: {e}")
             return False
+    
+    def _make_ajax_request(self, method: str, endpoint: str, data: Optional[Dict] = None, form_data: Optional[str] = None) -> Dict:
+        """Faz uma requisição AJAX para endpoints específicos que não usam a API v4"""
+        url = f"https://{self.subdomain}.kommo.com{endpoint}"
+        
+        headers = {
+            'Authorization': f'Bearer {self.refresh_token}',
+            'X-Requested-With': 'XMLHttpRequest'
+        }
+        
+        # Para POST com form data
+        if form_data:
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+            data = form_data
+        elif data:
+            headers['Content-Type'] = 'application/json'
+        
+        logger.debug(f"Fazendo requisição AJAX {method} para {url}")
+        
+        try:
+            if form_data:
+                response = requests.request(method, url, data=data, headers=headers)
+            else:
+                response = requests.request(method, url, json=data, headers=headers)
+            
+            logger.debug(f"Status da resposta AJAX: {response.status_code}")
+            
+            if response.status_code == 429:
+                retry_after = int(response.headers.get('Retry-After', 60))
+                logger.warning(f"Rate limit atingido. Aguardando {retry_after} segundos...")
+                time.sleep(retry_after)
+                return self._make_ajax_request(method, endpoint, data, form_data)
+            
+            if not response.ok:
+                logger.error(f"Erro HTTP {response.status_code} para {url}")
+                logger.error(f"Resposta: {response.text}")
+                response.raise_for_status()
+            
+            return response.json()
+            
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Erro na requisição AJAX para {url}: {e}")
+            raise
+    
+    def get_task_types(self) -> Dict:
+        """Obtém todos os tipos de tarefas da conta"""
+        logger.debug(f"Obtendo task types para {self.subdomain}")
+        return self._make_ajax_request('GET', '/ajax/tasks/types')
+    
+    def update_task_types(self, task_types_data: List[Dict], types_to_delete: List[int] = None) -> Dict:
+        """Atualiza os tipos de tarefas usando form data"""
+        logger.debug(f"Atualizando task types para {self.subdomain}")
+        
+        # Construir form data
+        form_parts = []
+        
+        # Adicionar novos tipos
+        for i, task_type in enumerate(task_types_data):
+            form_parts.append(f"add[{i}][sort]={task_type.get('sort', i)}")
+            form_parts.append(f"add[{i}][icon_id]={task_type.get('icon_id', 0)}")
+            form_parts.append(f"add[{i}][color]={task_type.get('color', '568FFA')}")
+            form_parts.append(f"add[{i}][name]={task_type.get('name', '')}")
+        
+        # Adicionar tipos para deletar
+        if types_to_delete:
+            for type_id in types_to_delete:
+                form_parts.append(f"delete[]={type_id}")
+        
+        # Adicionar action
+        form_parts.append("ACTION=ALL_EDIT")
+        
+        form_data = "&".join(form_parts)
+        logger.debug(f"Form data: {form_data}")
+        
+        return self._make_ajax_request('POST', '/ajax/tasks/types', form_data=form_data)
 
 class KommoSyncService:
     """Serviço principal para sincronização entre contas Kommo"""
@@ -383,6 +458,7 @@ class KommoSyncService:
             'pipelines': [],
             'custom_fields': {},
             'custom_field_groups': {},
+            'task_types': {},
             'roles': []
         }
         
@@ -520,6 +596,16 @@ class KommoSyncService:
         except Exception as e:
             logger.error(f"Erro ao extrair roles: {e}")
             config['roles'] = []
+        
+        # Extrair task types
+        try:
+            logger.info("🎯 Extraindo task types...")
+            task_types = self.master_api.get_task_types()
+            config['task_types'] = task_types
+            logger.info(f"✅ {len(task_types)} task types extraídos")
+        except Exception as e:
+            logger.error(f"Erro ao extrair task types: {e}")
+            config['task_types'] = {}
         
         return config
     
@@ -2203,6 +2289,7 @@ class KommoSyncService:
             'pipelines': {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []},
             'custom_field_groups': {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []},
             'custom_fields': {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []},
+            'task_types': {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []},
             'roles': {'created': 0, 'updated': 0, 'skipped': 0, 'deleted': 0, 'errors': []}
         }
         
@@ -2231,9 +2318,17 @@ class KommoSyncService:
                 logger.info(f"Campos: {fields_results['created']} criados, {fields_results['updated']} atualizados, "
                            f"{fields_results['skipped']} ignorados, {fields_results['deleted']} deletados")
             
-            # FASE 4: Sincronizar roles (funções/permissões)
+            # FASE 4: Sincronizar task types
             if not self._stop_sync:
-                logger.info("🔐 FASE 4: Sincronizando roles em lotes...")
+                logger.info("🎯 FASE 4: Sincronizando task types...")
+                task_types_results = self.sync_task_types_to_slave(slave_api, master_config, slave_api.subdomain, progress_callback)
+                total_results['task_types'] = task_types_results
+                logger.info(f"Task Types: {task_types_results['created']} criados, {task_types_results['updated']} atualizados, "
+                           f"{task_types_results['skipped']} ignorados, {task_types_results['deleted']} deletados")
+            
+            # FASE 5: Sincronizar roles (funções/permissões)
+            if not self._stop_sync:
+                logger.info("🔐 FASE 5: Sincronizando roles em lotes...")
                 
                 # Salvar mapeamentos no banco antes de sincronizar roles (para garantir que estejam atualizados)
                 if sync_group_id and slave_account_id:
@@ -3010,4 +3105,78 @@ class KommoSyncService:
         except Exception as e:
             logger.error(f"Erro ao salvar mapeamento stage: {e}")
             db.session.rollback()
+
+    def sync_task_types_to_slave(self, slave_api: KommoAPIService, master_config: Dict, 
+                               slave_subdomain: str, progress_callback: Optional[Callable] = None) -> Dict:
+        """Sincroniza tipos de tarefas da master para a slave"""
+        logger.info(f"🎯 Iniciando sincronização de task types para {slave_subdomain}")
+        
+        results = {
+            'created': 0,
+            'updated': 0,
+            'deleted': 0,
+            'skipped': 0,
+            'errors': []
+        }
+        
+        try:
+            # Obter task types da master
+            logger.info("📋 Obtendo task types da conta master...")
+            master_task_types = self.master_api.get_task_types()
+            logger.info(f"📊 Master tem {len(master_task_types)} task types")
+            
+            # Obter task types da slave
+            logger.info(f"📋 Obtendo task types da conta slave ({slave_subdomain})...")
+            slave_task_types = slave_api.get_task_types()
+            logger.info(f"📊 Slave tem {len(slave_task_types)} task types")
+            
+            # Processar tipos da master
+            types_to_create = []
+            types_to_delete = []
+            
+            # Coletar IDs dos tipos existentes na slave para deletar
+            for key, slave_type in slave_task_types.items():
+                types_to_delete.append(slave_type['id'])
+                logger.info(f"🗑️ Marcando para deletar: '{slave_type['option']}' (ID: {slave_type['id']})")
+            
+            # Preparar tipos da master para criação
+            for key, master_type in master_task_types.items():
+                task_type_data = {
+                    'name': master_type['option'],
+                    'color': master_type['color'],
+                    'icon_id': master_type.get('icon_id', 0),
+                    'sort': len(types_to_create)  # Ordem sequencial
+                }
+                types_to_create.append(task_type_data)
+                logger.info(f"✅ Preparando para criar: '{master_type['option']}' (cor: {master_type['color']})")
+            
+            # Executar sincronização se há tipos para processar
+            if types_to_create or types_to_delete:
+                logger.info(f"🔄 Sincronizando: {len(types_to_create)} para criar, {len(types_to_delete)} para deletar")
+                
+                response = slave_api.update_task_types(types_to_create, types_to_delete)
+                logger.info(f"✅ Task types sincronizados com sucesso")
+                
+                results['created'] = len(types_to_create)
+                results['deleted'] = len(types_to_delete)
+                
+                # Log dos resultados
+                for task_type in types_to_create:
+                    logger.info(f"   ✅ Criado: '{task_type['name']}'")
+                    
+            else:
+                logger.info("📝 Nenhuma alteração necessária nos task types")
+                results['skipped'] = len(slave_task_types)
+            
+            # Callback de progresso
+            if progress_callback:
+                progress_callback("Task types sincronizados")
+                
+        except Exception as e:
+            error_msg = f"Erro ao sincronizar task types: {e}"
+            logger.error(error_msg)
+            results['errors'].append(error_msg)
+        
+        logger.info(f"📊 Sincronização de task types concluída: {results}")
+        return results
 
