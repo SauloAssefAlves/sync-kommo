@@ -601,6 +601,11 @@ class KommoSyncService:
         try:
             logger.info("🎯 Extraindo task types...")
             task_types = self.master_api.get_task_types()
+            
+            # Verificar se é uma lista vazia e converter para dict
+            if isinstance(task_types, list):
+                task_types = {}
+                
             config['task_types'] = task_types
             logger.info(f"✅ {len(task_types)} task types extraídos")
         except Exception as e:
@@ -3123,11 +3128,21 @@ class KommoSyncService:
             # Obter task types da master
             logger.info("📋 Obtendo task types da conta master...")
             master_task_types = self.master_api.get_task_types()
+            
+            # Verificar se é uma lista vazia (quando não há task types) e converter para dict
+            if isinstance(master_task_types, list):
+                master_task_types = {}
+                
             logger.info(f"📊 Master tem {len(master_task_types)} task types")
             
             # Obter task types da slave
             logger.info(f"📋 Obtendo task types da conta slave ({slave_subdomain})...")
             slave_task_types = slave_api.get_task_types()
+            
+            # Verificar se é uma lista vazia (quando não há task types) e converter para dict
+            if isinstance(slave_task_types, list):
+                slave_task_types = {}
+                
             logger.info(f"📊 Slave tem {len(slave_task_types)} task types")
             
             # Processar tipos da master
@@ -3136,19 +3151,33 @@ class KommoSyncService:
             
             # Coletar IDs dos tipos existentes na slave para deletar
             for key, slave_type in slave_task_types.items():
-                types_to_delete.append(slave_type['id'])
-                logger.info(f"🗑️ Marcando para deletar: '{slave_type['option']}' (ID: {slave_type['id']})")
+                # Verificar se slave_type é um dicionário válido
+                if not isinstance(slave_type, dict):
+                    logger.warning(f"⚠️ Task type inválido na slave: {slave_type}")
+                    continue
+                    
+                types_to_delete.append(slave_type.get('id'))
+                logger.info(f"🗑️ Marcando para deletar: '{slave_type.get('option', 'Sem nome')}' (ID: {slave_type.get('id')})")
+            
+            # Verificar se master_task_types também é uma lista e converter
+            if isinstance(master_task_types, list):
+                master_task_types = {}
             
             # Preparar tipos da master para criação
             for key, master_type in master_task_types.items():
+                # Verificar se master_type é um dicionário válido
+                if not isinstance(master_type, dict):
+                    logger.warning(f"⚠️ Task type inválido na master: {master_type}")
+                    continue
+                    
                 task_type_data = {
-                    'name': master_type['option'],
-                    'color': master_type['color'],
+                    'name': master_type.get('option', 'Sem nome'),
+                    'color': master_type.get('color', '568FFA'),
                     'icon_id': master_type.get('icon_id', 0),
                     'sort': len(types_to_create)  # Ordem sequencial
                 }
                 types_to_create.append(task_type_data)
-                logger.info(f"✅ Preparando para criar: '{master_type['option']}' (cor: {master_type['color']})")
+                logger.info(f"✅ Preparando para criar: '{master_type.get('option', 'Sem nome')}' (cor: {master_type.get('color', '568FFA')})")
             
             # Executar sincronização se há tipos para processar
             if types_to_create or types_to_delete:
@@ -3169,6 +3198,7 @@ class KommoSyncService:
                 results['skipped'] = len(slave_task_types)
             
             # Callback de progresso
+            logger.debug("🔄 Executando callback de progresso para task types...")
             if progress_callback:
                 progress_callback("Task types sincronizados")
                 
